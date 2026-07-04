@@ -1,0 +1,98 @@
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+
+# Native AOT publish output (avoid bundling the full binary)
+publish/
+*.native.bin
+*.a
+*.so
+*.dylib
+*.dll
+
+# VS Code / Visual Studio
+.vs/
+.vscode/
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+*.user
+*.suo
+*.userprefs
+*.USERPREFS
+
+# Rider
+.idea/
+*.sln.docstates
+*.csproj.DotSettings
+*.sln.DotSettings
+*.csproj.DotSettings.user
+
+# ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+_GlobalUsings.cs
+*.DotSettings
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+*.lock.json
+project.lock.json
+project.assets.json
+*.nuget.props
+*.nuget.targets
+
+# Test results
+TestResults/
+[Tt]est[Rr]esult*/
+*.coverage
+*.coveragexml
+coverage.*.xml
+coverage.xml
+coverage.json
+coverage.cobertura.xml
+
+# Misc build/system
+*.swp
+*.swo
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# Azure / DevOps
+.vs/copilot/
+.azure/
+
+# .NET tools
+.config/
+*.workspace
+
+# Local config overrides (keep appsettings.json, but ignore overrides)
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.Production.json
+
+# SQLite database files (runtime-generated)
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+mydb.sqlite*
+
+# Secrets (avoid these being committed — appsettings.json is the placeholder)
+appsettings.*.User.json
+secrets.json
+secrets.*.json
+
+# Powershell / Bash
+*.ps1
+*.sh
+!*.psm1
