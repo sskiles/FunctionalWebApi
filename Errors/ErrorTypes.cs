@@ -8,9 +8,11 @@ namespace FunctionalWebApi.Errors;
 /// </summary>
 public abstract class AppException : Exception
 {
-    protected AppException()                                       { }
-    protected AppException(string message)                         : base(message) { }
-    protected AppException(string message, Exception inner)        : base(message, inner) { }
+    protected AppException() { }
+    protected AppException(string message)
+        : base(message) { }
+    protected AppException(string message, Exception inner)
+        : base(message, inner) { }
 }
 
 /// <summary>
@@ -18,8 +20,10 @@ public abstract class AppException : Exception
 /// </summary>
 public sealed class NotFoundError : AppException
 {
-    public NotFoundError()                           : base()            { }
-    public NotFoundError(string message)             : base(message)     { }
+    public NotFoundError()
+        : base() { }
+    public NotFoundError(string message)
+        : base(message) { }
 }
 
 /// <summary>
@@ -30,11 +34,15 @@ public sealed class ValidationError : AppException
     public IDictionary<string, string[]> Errors { get; } =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
 
-    public ValidationError() : base("One or more validation errors occurred.") { }
+    public ValidationError()
+        : base("One or more validation errors occurred.") { }
     public ValidationError(IDictionary<string, string[]> errors)
         : base("One or more validation errors occurred.")
     {
-        foreach (var kvp in errors) Errors[kvp.Key] = kvp.Value;
+        foreach (var kvp in errors)
+        {
+            Errors[kvp.Key] = kvp.Value;
+        }
     }
 }
 
@@ -43,8 +51,10 @@ public sealed class ValidationError : AppException
 /// </summary>
 public sealed class AuthError : AppException
 {
-    public AuthError()                          : base("Unauthorized.") { }
-    public AuthError(string message)            : base(message)        { }
+    public AuthError()
+        : base("Unauthorized.") { }
+    public AuthError(string message)
+        : base(message) { }
 }
 
 /// <summary>
@@ -57,12 +67,14 @@ public sealed class SqlError : AppException
 
     public Kind Code { get; }
 
-    public SqlError(Kind code, string? message = null) : base(message ?? code.ToString())
+    public SqlError(Kind code, string? message = null)
+        : base(message ?? code.ToString())
     {
         Code = code;
     }
 
-    public SqlError(Kind code, Exception inner) : base(code.ToString(), inner)
+    public SqlError(Kind code, Exception inner)
+        : base(code.ToString(), inner)
     {
         Code = code;
     }

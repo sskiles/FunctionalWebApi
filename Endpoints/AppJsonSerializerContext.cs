@@ -1,9 +1,9 @@
+namespace FunctionalWebApi;
+
 using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.Mvc;
 using FunctionalWebApi.Contracts;
 using FunctionalWebApi.Models;
-
-namespace FunctionalWebApi;
+using Microsoft.AspNetCore.Mvc;
 
 /// <summary>
 /// Source-generated JSON metadata for native AOT. Without this

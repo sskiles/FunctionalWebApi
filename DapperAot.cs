@@ -2,4 +2,4 @@
 // generator intercepts compatible Dapper call sites (e.g.
 // `connection.QueryFirst<T>(sql, params)`) and produces IL that doesn't fall
 // back on runtime Reflection.Emit — which is required for NativeAOT.
-[assembly: Dapper.DapperAotAttribute(true)]
+[assembly: Dapper.DapperAot(true)]

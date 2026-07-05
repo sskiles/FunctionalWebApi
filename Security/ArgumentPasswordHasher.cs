@@ -1,7 +1,7 @@
+namespace FunctionalWebApi.Security;
+
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Cryptography.KeyDerivation;
-
-namespace FunctionalWebApi.Security;
 
 /// <summary>
 /// PBKDF2‑HMAC‑SHA256 password hasher. The stored format is the
@@ -44,11 +44,11 @@ public static class ArgumentPasswordHasher
     {
         var saltBytes = RandomNumberGenerator.GetBytes(SaltSize);
         var hashBytes = KeyDerivation.Pbkdf2(
-            password:           new string(passwordChars),
-            salt:               saltBytes,
-            prf:                KeyDerivationPrf.HMACSHA256,
-            iterationCount:     Iterations,
-            numBytesRequested:  HashSize);
+            password: new string(passwordChars),
+            salt: saltBytes,
+            prf: KeyDerivationPrf.HMACSHA256,
+            iterationCount: Iterations,
+            numBytesRequested: HashSize);
 
         Array.Clear(passwordChars, 0, passwordChars.Length);
 
@@ -66,21 +66,25 @@ public static class ArgumentPasswordHasher
     /// </summary>
     public static bool AreEqual(char[] a, char[] b)
     {
-        if (a is null || b is null) return false;
+        if (a is null || b is null)
+        {
+            return false;
+        }
+
         try
         {
             var hashA = KeyDerivation.Pbkdf2(
-                password:           new string(a),
-                salt:               ComparisonSalt,
-                prf:                KeyDerivationPrf.HMACSHA256,
-                iterationCount:     Iterations,
-                numBytesRequested:  HashSize);
+                password: new string(a),
+                salt: ComparisonSalt,
+                prf: KeyDerivationPrf.HMACSHA256,
+                iterationCount: Iterations,
+                numBytesRequested: HashSize);
             var hashB = KeyDerivation.Pbkdf2(
-                password:           new string(b),
-                salt:               ComparisonSalt,
-                prf:                KeyDerivationPrf.HMACSHA256,
-                iterationCount:     Iterations,
-                numBytesRequested:  HashSize);
+                password: new string(b),
+                salt: ComparisonSalt,
+                prf: KeyDerivationPrf.HMACSHA256,
+                iterationCount: Iterations,
+                numBytesRequested: HashSize);
 
             return CryptographicOperations.FixedTimeEquals(hashA, hashB);
         }
@@ -147,11 +151,11 @@ public static class ArgumentPasswordHasher
         // The plaintext‑hashing path is always taken so the timing profile is
         // uniform across the two outcomes.
         var actual = KeyDerivation.Pbkdf2(
-            password:           new string(passwordChars),
-            salt:               salt,
-            prf:                KeyDerivationPrf.HMACSHA256,
-            iterationCount:     Iterations,
-            numBytesRequested:  HashSize);
+            password: new string(passwordChars),
+            salt: salt,
+            prf: KeyDerivationPrf.HMACSHA256,
+            iterationCount: Iterations,
+            numBytesRequested: HashSize);
 
         Array.Clear(passwordChars, 0, passwordChars.Length);
 
@@ -166,11 +170,11 @@ public static class ArgumentPasswordHasher
     private static void BurnCpu()
     {
         _ = KeyDerivation.Pbkdf2(
-            password:           string.Empty,
-            salt:               new byte[SaltSize],
-            prf:                KeyDerivationPrf.HMACSHA256,
-            iterationCount:     Iterations,
-            numBytesRequested:  HashSize);
+            password: string.Empty,
+            salt: new byte[SaltSize],
+            prf: KeyDerivationPrf.HMACSHA256,
+            iterationCount: Iterations,
+            numBytesRequested: HashSize);
     }
 
     private static bool TryDecode(ReadOnlySpan<char> slice, out byte[] bytes)

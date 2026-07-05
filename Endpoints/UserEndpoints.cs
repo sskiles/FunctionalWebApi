@@ -1,11 +1,10 @@
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Mvc;
+namespace FunctionalWebApi.Endpoints;
+
 using FunctionalWebApi.Contracts;
 using FunctionalWebApi.Models;
-using FunctionalWebApi.Services;
 using FunctionalWebApi.Repositories;
-
-namespace FunctionalWebApi.Endpoints;
+using FunctionalWebApi.Services;
+using Microsoft.AspNetCore.Builder;
 
 /// <summary>
 /// HTTP endpoints for user accounts: registration, authentication, and lookup.
@@ -17,8 +16,8 @@ public static class UserEndpoints
     // Cached delegates — Composition calls <see cref="Bind"/> once at startup
     // so request handlers don't have to re‑build connection strings on every call.
     private static Func<string, char[], Task<UserDto?>> Authenticate = null!;
-    private static string ConnectionString = "";
-    private static JwtConfig Jwt               = null!;
+    private static string ConnectionString = string.Empty;
+    private static JwtConfig Jwt = null!;
 
     /// <summary>
     /// Called by <see cref="Composition.RegisterAllEndpoints"/> at startup.
@@ -31,9 +30,9 @@ public static class UserEndpoints
         string connectionString,
         JwtConfig jwt)
     {
-        Authenticate    = authenticate;
+        Authenticate = authenticate;
         ConnectionString = connectionString;
-        Jwt             = jwt;
+        Jwt = jwt;
     }
 
     /// <summary>
@@ -46,24 +45,23 @@ public static class UserEndpoints
         // Routing a lambda declared inline, or assigning the function to an
         // intermediate local, would force the runtime RequestDelegateFactory to
         // fall back to reflection-based handling under native AOT.
-
-        app.MapPost("/login",        Login)
+        _ = app.MapPost("/login", Login)
            .Produces<AuthToken>()
            .Produces(StatusCodes.Status401Unauthorized)
            .WithName("Login");
 
-        app.MapPost("/users",         Create)
+        _ = app.MapPost("/users", Create)
            .Produces<UserDto>()
            .Produces(StatusCodes.Status409Conflict)
            .Produces(StatusCodes.Status400BadRequest)
            .WithName("CreateUser");
 
-        app.MapGet("/users/{id:int}", GetById)
+        _ = app.MapGet("/users/{id:int}", GetById)
            .Produces<UserDto>()
            .Produces(StatusCodes.Status404NotFound)
            .WithName("GetUser");
 
-        app.MapGet("/users",          List)
+        _ = app.MapGet("/users", List)
            .Produces<IReadOnlyList<UserDto>>()
            .WithName("GetUsers");
 
@@ -74,7 +72,6 @@ public static class UserEndpoints
     // Each handler is plain code that calls the domain services / repository.
     // Failures are propagated as exceptions and translated by
     // <see cref="FunctionalWebApi.Domain.DomainErrorHandler"/>.
-
     private static async Task<IResult> Login(LoginCmd cmd)
     {
         var token = await UserService.LoginAsync(Authenticate, Jwt, cmd);

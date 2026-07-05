@@ -1,14 +1,15 @@
-using FunctionalWebApi.Contracts;
-using FunctionalWebApi.Errors;
-using FunctionalWebApi.Models;
-using System.IdentityModel.Tokens.Jwt;
+namespace FunctionalWebApi.Services;
+
 using System.Security.Claims;
 using System.Text;
+using FunctionalWebApi.Contracts;
+using FunctionalWebApi.Endpoints;
+using FunctionalWebApi.Errors;
+using FunctionalWebApi.Models;
+using FunctionalWebApi.Security;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using JwtReg = Microsoft.IdentityModel.JsonWebTokens.JwtRegisteredClaimNames;
-
-namespace FunctionalWebApi.Services;
 
 /// <summary>
 /// Stateless service layer for user-facing operations. Failures throw
@@ -44,11 +45,13 @@ public static class UserService
         Array.Clear(passwordChars, 0, passwordChars.Length);
 
         if (user is null)
+        {
             throw new AuthError("Invalid credentials");
+        }
 
-        var jwtKey            = jwt.Key;
-        var jwtIssuer         = jwt.Issuer;
-        var jwtAudience       = jwt.Audience;
+        var jwtKey = jwt.Key;
+        var jwtIssuer = jwt.Issuer;
+        var jwtAudience = jwt.Audience;
         var jwtExpiresMinutes = jwt.ExpiresMinutes;
 
         var tokenHandler = new JsonWebTokenHandler();
@@ -57,14 +60,16 @@ public static class UserService
         {
             Subject = new ClaimsIdentity(new[]
             {
-                new Claim(JwtReg.Sub,  user.Id.ToString()),
-                new Claim(JwtReg.Jti,  Guid.NewGuid().ToString()),
-                new Claim("uid",      user.Id.ToString())
+                new Claim(JwtReg.Sub,   user.Id.ToString()),
+                new Claim(JwtReg.Jti,   Guid.NewGuid().ToString()),
+                new Claim("uid",        user.Id.ToString()),
             }),
             Expires = DateTime.UtcNow.AddMinutes(jwtExpiresMinutes),
             Issuer = jwtIssuer,
             Audience = jwtAudience,
-            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256)
+            SigningCredentials = new SigningCredentials(
+                new SymmetricSecurityKey(key),
+                SecurityAlgorithms.HmacSha256),
         };
         var jwtValue = tokenHandler.CreateToken(tokenDescriptor);
         return new AuthToken(jwtValue);
@@ -85,25 +90,27 @@ public static class UserService
         ArgumentNullException.ThrowIfNull(cmd);
 
         // Copy plaintext into mutable buffers so we can wipe them after use.
-        var password         = cmd.Password.ToCharArray();
-        var confirmPassword  = cmd.ConfirmPassword.ToCharArray();
+        var password = cmd.Password.ToCharArray();
+        var confirmPassword = cmd.ConfirmPassword.ToCharArray();
         try
         {
             // Constant‑time equality check: identical inputs produce identical
             // PBKDF2 digests (deterministic salt); mismatches yield constant‑time
             // rejection. `AreEqual` wipes both buffers for us.
-            if (!FunctionalWebApi.Security.ArgumentPasswordHasher.AreEqual(password, confirmPassword))
+            if (!ArgumentPasswordHasher.AreEqual(password, confirmPassword))
+            {
                 throw new ValidationError(new Dictionary<string, string[]>
                 {
-                    ["confirmPassword"] = new[] { "Password confirmation does not match." }
+                    ["confirmPassword"] = ["Password confirmation does not match."],
                 });
+            }
 
             // Hand a fresh plaintext to the repository; it will hash + clear.
             var user = await FunctionalWebApi.Repositories.UserRepository.CreateAsync(
-                connectionString: FunctionalWebApi.Composition.ConnectionString!,
-                name:             cmd.Name,
-                email:            cmd.Email,
-                passwordChars:    cmd.Password.ToCharArray()); // repository hashes & clears
+                connectionString: Composition.ConnectionString!,
+                name: cmd.Name,
+                email: cmd.Email,
+                passwordChars: cmd.Password.ToCharArray()); // repository hashes & clears
 
             return user;
         }

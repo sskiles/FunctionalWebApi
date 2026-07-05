@@ -1,10 +1,9 @@
+namespace FunctionalWebApi.Endpoints;
+
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using FunctionalWebApi.Contracts;
-using FunctionalWebApi.Endpoints;
 using FunctionalWebApi.Repositories;
-
-namespace FunctionalWebApi;
 
 /// <summary>
 /// Composition root: reads configuration, wires the user endpoints' data and
@@ -14,11 +13,11 @@ namespace FunctionalWebApi;
 public static class Composition
 {
     /// <summary>
-    /// Cached SQLite connection string, exposed so the endpoint module can
+    /// Gets cached SQLite connection string, exposed so the endpoint module can
     /// pass it to the data layer. <see langword="internal"/> because callers
     /// outside the assembly don't need it.
     /// </summary>
-    internal static string ConnectionString { get; private set; } = "";
+    internal static string ConnectionString { get; private set; } = string.Empty;
 
     /// <summary>
     /// Reads configuration, builds the login delegate and binds it into
@@ -32,9 +31,9 @@ public static class Composition
 
         var jwtSection = configuration.GetSection("Jwt");
         var jwt = new JwtConfig(
-            Key:            jwtSection["Key"]!,
-            Issuer:         jwtSection["Issuer"]!,
-            Audience:       jwtSection["Audience"]!,
+            Key: jwtSection["Key"]!,
+            Issuer: jwtSection["Issuer"]!,
+            Audience: jwtSection["Audience"]!,
             ExpiresMinutes: int.Parse(jwtSection["ExpiresMinutes"]!));
 
         // Bind the login delegate plus connection string + JWT into the user

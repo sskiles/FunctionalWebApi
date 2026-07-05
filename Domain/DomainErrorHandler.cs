@@ -1,9 +1,9 @@
+namespace FunctionalWebApi.Domain;
+
+using FunctionalWebApi.Errors;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using FunctionalWebApi.Errors;
-
-namespace FunctionalWebApi.Domain;
 
 /// <summary>
 /// Maps domain exceptions to HTTP response shapes:
@@ -25,7 +25,7 @@ internal sealed class DomainErrorHandler : IExceptionHandler
         return exception switch
         {
             NotFoundError => Write(httpContext, StatusCodes.Status404NotFound, problem: null),
-            AuthError     => Write(httpContext, StatusCodes.Status401Unauthorized, problem: null),
+            AuthError => Write(httpContext, StatusCodes.Status401Unauthorized, problem: null),
             ValidationError ve => Write(httpContext, StatusCodes.Status400BadRequest, ve.Errors),
             SqlError sql when sql.Code == SqlError.Kind.ConstraintViolation
                               => Write(httpContext, StatusCodes.Status409Conflict, problem: null),
@@ -45,6 +45,7 @@ internal sealed class DomainErrorHandler : IExceptionHandler
                 new ValidationProblemDetails(problem) { Status = statusCode },
                 AppJsonSerializerContext.Default.ValidationProblemDetails!);
         }
+
         return true;
     }
 }

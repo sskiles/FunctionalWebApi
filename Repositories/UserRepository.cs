@@ -1,9 +1,10 @@
+namespace FunctionalWebApi.Repositories;
+
 using Dapper;
 using Microsoft.Data.Sqlite;
 using FunctionalWebApi.Errors;
 using FunctionalWebApi.Models;
-
-namespace FunctionalWebApi.Repositories;
+using FunctionalWebApi.Security;
 
 public static class UserRepository
 {
@@ -23,16 +24,30 @@ public static class UserRepository
         ArgumentNullException.ThrowIfNull(email);
         ArgumentNullException.ThrowIfNull(passwordChars);
 
-        var trimmedName  = name.Trim();
+        var trimmedName = name.Trim();
         var trimmedEmail = email.Trim().ToLowerInvariant();
 
         if (trimmedName.Length == 0)
-            throw new ValidationError(new Dictionary<string, string[]> { ["name"] = ["Name cannot be empty."] });
+        {
+            throw new ValidationError(
+                new Dictionary<string, string[]>
+                {
+                    ["name"] = ["Name cannot be empty."],
+                });
+        }
+
         if (trimmedEmail.Length < 5 || !trimmedEmail.Contains('@') || !trimmedEmail.Contains('.'))
-            throw new ValidationError(new Dictionary<string, string[]> { ["email"] = ["Email format invalid."] });
+        {
+            throw new ValidationError(
+                new Dictionary<string, string[]>
+                {
+                    ["email"] = ["Email format invalid."],
+                });
+        }
 
         // Hash the password and immediately clear the plaintext buffer.
-        var storedHash = FunctionalWebApi.Security.ArgumentPasswordHasher.Hash(passwordChars);
+        var storedHash = ArgumentPasswordHasher.Hash(passwordChars);
+
         // `Hash` clears the buffer as part of its contract; just being defensive.
         Array.Clear(passwordChars, 0, passwordChars.Length);
 
@@ -89,7 +104,9 @@ public static class UserRepository
 
         // Hand off to the same hasher that stored the value. The
         // plaintext‑to‑array buffer is consumed deterministically.
-        var verified = FunctionalWebApi.Security.ArgumentPasswordHasher.Verify(passwordChars, row?.PasswordHash ?? "");
+        var verified = ArgumentPasswordHasher.Verify(
+            passwordChars,
+            row?.PasswordHash ?? string.Empty);
 
         return verified ? row : null;
     }

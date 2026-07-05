@@ -1,22 +1,17 @@
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using ResultType;
-using FunctionalWebApi;
-using FunctionalWebApi.Errors;
-using FunctionalWebApi.Models;
-using FunctionalWebApi.Contracts;
+#pragma warning disable SA1200 // Using directives should be placed correctly
 using Dapper;
+using FunctionalWebApi;
+using FunctionalWebApi.Endpoints;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Data.Sqlite;
+#pragma warning restore SA1200 // Using directives should be placed correctly
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Source-generated JSON metadata keeps native AOT working without reflection
 // at runtime. The minimal API surfaces IResult, which System.Text.Json must
 // be able to materialise.
-builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options =>
+builder.Services.Configure<JsonOptions>(options =>
 {
     options.SerializerOptions.TypeInfoResolver = AppJsonSerializerContext.Default;
 });
@@ -37,7 +32,7 @@ var connectionString = configuration.GetConnectionString("Sqlite")!;
 await using (var conn = new SqliteConnection(connectionString))
 {
     await conn.OpenAsync();
-    await conn.ExecuteAsync(@"
+    _ = await conn.ExecuteAsync(@"
         CREATE TABLE IF NOT EXISTS Users (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             Name TEXT NOT NULL,
@@ -49,4 +44,4 @@ await using (var conn = new SqliteConnection(connectionString))
 // Everything wired in one call.
 app.RegisterAllEndpoints(configuration);
 
-app.Run();
+await app.RunAsync();
