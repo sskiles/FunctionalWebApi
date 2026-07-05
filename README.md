@@ -2,56 +2,53 @@
 
 > A reference implementation for building ASP.NET Core Web APIs with functional programming principles, targeting Native AOT from day one.
 
-## Philosophy
+## What is This?
 
-This project demonstrates that **functional programming and web APIs are not contradictory** — they are complementary. By rejecting mutable state, side-effect-laden dependencies, and framework-magic DI containers, we achieve:
+A minimal, production-ready Web API that demonstrates how functional programming practices — explicit dependencies, pure functions, immutable data — integrate cleanly with ASP.NET Core. No frameworks beyond the standard stack. No runtime reflection. No hidden state.
 
-- **Predictability**: The same input always produces the same output
-- **Testability**: Pure functions with explicit dependencies require no mocking frameworks
-- **Composability**: Small, focused functions compose into larger workflows
-- **AOT Safety**: No reflection, no runtime code generation, no hidden costs
+## Dependency Rejection
 
-## What is Dependency Rejection?
+Most ASP.NET Core applications use **Dependency Injection** as the primary composition mechanism. DI improves on hard-coded dependencies, but introduces its own problems:
 
-Most ASP.NET Core applications use **Dependency Injection (DI)** as the primary mechanism for composing services. While DI improves testability over hard-coded dependencies, it introduces its own problems:
+- **Hidden dependencies**: A service's actual needs are invisible without reading the container configuration
+- **Framework coupling**: Business logic becomes entangled with `IServiceProvider`, lifetime management, and scoped resolution
+- **Opaque transitivity**: Service A → B → C means A implicitly depends on everything C needs
+- **AOT/Trimming hostile**: DI containers rely on runtime reflection (`Activator.CreateInstance`)
 
-- **Hidden dependencies**: You cannot tell what a service needs by looking at its constructor alone — you must understand the container's configuration
-- **Framework coupling**: Business logic becomes entangled with `IServiceProvider`, lifetime management, and scoped service resolution
-- **Opaque transitive dependencies**: Service A → B → C means A implicitly depends on everything C needs
-- **AOT/Trimming hostile**: DI containers rely on runtime reflection (`Activator.CreateInstance`, `Type.GetType`)
-
-**Dependency Rejection** flips this. Instead of injecting opaque interfaces, we pass explicit functions and values at composition time:
+**Dependency Rejection** passes explicit functions and values at composition time:
 
 ```csharp
-// BEFORE: DI container — who knows what UserService actually needs?
+// DI: opaque — what does UserService actually need?
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<UserService>();
 
-// AFTER: Explicit dependencies — every need is visible in the signature
-var login = UserService.LoginAsync(
-    findByEmail: UserRepository.FindByEmailAsync,
-    verifyPassword: ArgumentPasswordHasher.Verify,
-    createToken: AuthService.CreateToken,
-    connectionString: configuration.GetConnectionString("Sqlite")!);
+// Dependency Rejection: every need is visible in the signature
+var loginHandler = (LoginCmd cmd, CancellationToken ct) =>
+    UserService.LoginAsync(
+        findByEmail: UserRepository.FindByEmailAsync,
+        verifyPassword: ArgumentPasswordHasher.Verify,
+        createToken: JwtService.CreateToken,
+        connectionString: configuration.GetConnectionString("Sqlite")!,
+        cmd, ct);
 ```
 
-The `LoginAsync` method is pure: it receives exactly what it needs, no more, no less. The function signature is the contract. There is no hidden state, no surprise dependencies, and no framework magic required to understand the code.
+The function signature *is* the contract. There are no hidden states, no surprise dependencies, and no framework magic required to understand the code.
 
 ### Why No DI Container?
 
 | DI Container | Dependency Rejection |
-|-------------|----------------------|
+|---|---|
 | `Func<IServiceProvider, T>` | `Func<TIn, TOut>` |
 | Runtime reflection | Compile-time verification |
 | Hidden graph of dependencies | Flat, explicit parameter list |
 | Scoped lifetimes managed by framework | Lifetimes are just `using` blocks |
-| Hard to test without `TestServer` or mocks | Plain C# functions, testable with `new` |
+| Hard to test without `TestServer` or mocks | Plain functions, testable with `new` |
 | Reflection breaks AOT trimming | Zero runtime reflection |
 
 ## The Functional Stack
 
-### Result&lt;T, E&gt; — Explicit Error Handling
+### Result&lt;T, E&gt;
 
 Exceptions for control flow are invisible in the type system. `Result<T, E>` makes success and failure first-class:
 
@@ -67,7 +64,7 @@ public readonly record struct Result<TValue, TError>
 }
 ```
 
-**Usage**: no ceremony, just return the value or error:
+No ceremony. Just return the value or the error:
 
 ```csharp
 public async Task<Result<UserDto, NotFoundError>> GetByIdAsync(int id)
@@ -79,9 +76,9 @@ public async Task<Result<UserDto, NotFoundError>> GetByIdAsync(int id)
 
 The caller *must* handle both branches. The compiler enforces this.
 
-### AppException Hierarchy — When You Need to Throw
+### AppException
 
-Not all errors are business-logic failures. Some are truly exceptional (database disconnected, disk full, network partition). For these, we use a typed exception hierarchy:
+Not all errors are business-logic failures. Some are truly exceptional. We use a typed hierarchy:
 
 ```csharp
 public abstract class AppException(string message) : Exception(message);
@@ -93,7 +90,7 @@ These propagate to a single `IExceptionHandler` which maps them to HTTP status c
 
 ### Static, Stateless Functions
 
-Every service, repository, and handler is a `static` method. There is no `class` state, no `this`, no fields to mutate:
+Every service, repository, and endpoint handler is a `static` method. No `class` state, no `this`, no mutable fields:
 
 ```csharp
 internal static class UserService
@@ -106,7 +103,7 @@ internal static class UserService
         LoginCmd cmd,
         CancellationToken ct)
     {
-        // Pure logic: no hidden state, no service locator calls
+        // Pure logic. No hidden state. No service locator.
     }
 }
 ```
@@ -116,85 +113,22 @@ internal static class UserService
 - Thread-safe by default
 - No allocation overhead from instantiating service classes
 - Method-group references are AOT-friendly (no lambda closures)
-- Easier to reason about: `Input → Output`, period
+- Input → Output. Nothing else.
 
-## Architecture
+## Design Decisions
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        HTTP Transport                           │
-│  Endpoints/UserEndpoints.cs  │  Endpoints/Composition.cs        │
-│  MapPost/MapGet             │  Wires config → pure functions    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-├─────────────────────────────────────────────────────────────────┤
-│                        Business Logic                           │
-│  Services/UserService.cs    │  Pure functions, throws AppException│
-└─────────────────────────────────────────────────────────────────┘
-                              │
-├─────────────────────────────────────────────────────────────────┤
-│                        Data Access                              │
-│  Repositories/UserRepository.cs  │  Dapper.AOT, static methods │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-├─────────────────────────────────────────────────────────────────┤
-│                        Pure Domain                              │
-│  Domain/Result.cs           │  Algebraic data types           │
-│  Errors/ErrorTypes.cs       │  Exception hierarchy            │
-│  Models/UserDto.cs          │  Immutable records              │
-└─────────────────────────────────────────────────────────────────┘
-```
+| What | Why |
+|---|---|
+| `static` methods | Immutable state, AOT-safe method groups, no allocation |
+| `Result<T,E>` | Explicit error branches, compiler-enforced handling |
+| Typed `AppException` | Single exception handler maps to HTTP; typed catch blocks |
+| Dapper.AOT | No runtime model building, source-generated SQL, trim-safe |
+| `Func<>` injection | Every dependency visible in the signature |
+| Native AOT | ~18 MB binary, 50ms cold start, no runtime |
+| Records | Immutable by default, value equality, concise syntax |
+| File-scoped namespaces | Less nesting, clearer intent |
 
-## Why These Decisions?
-
-| Decision | Alternative | Why We Chose This |
-|----------|-------------|-------------------|
- | `static` methods | Instance classes with DI | No mutable state, no reflection, AOT-safe method groups |
-| `Result<T,E>` | Exceptions everywhere | Explicit error branches, compiler-enforced handling |
-| Typed `AppException` | Generic `Exception` | Single `IExceptionHandler` maps to HTTP, typed catch blocks |
-| Dapper.AOT | EF Core | No runtime model building, source-generated SQL, trim-safe |
-| `Func<>` injection | `IServiceProvider` | Every dependency visible in the signature, testable with plain `new` |
-| Native AOT | JIT runtime | ~18 MB self-contained binary, 50ms cold start, no runtime patching |
-| PBKDF2 (600k iterations) | BCrypt/Argon2 | Pure .NET, no native dependencies, PHC format future-proofs migrations |
-| Records | Classes | Immutable by default, value equality, concise syntax |
-| File-scoped namespaces | Block-scoped | Less nesting, clearer intent |
-
-## Security
-
-### Password Hashing
-
-- **Algorithm**: PBKDF2-HMAC-SHA256, 600,000 iterations (OWASP 2023)
-- **Salt**: 16 bytes cryptographically random
-- **Hash**: 32 bytes
-- **Format**: `pbkdf2-sha256$600000$<base64(salt)><base64(hash)>` (PHC-style)
-- **Constant-time verification**: `CryptographicOperations.FixedTimeEquals` prevents timing attacks on both login and registration paths
-
-### JWT Tokens
-
-- Uses `JsonWebTokenHandler` (not `JwtSecurityTokenHandler`) — AOT-compatible, no reflection
-- Short expiry (60 minutes)
-- Claims include `sub` (user ID), `jti` (token ID for revocation future-proofing)
-
-## Native AOT
-
-```bash
-dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
-```
-
-- **Binary size**: ~18 MB (self-contained, no runtime required)
-- **Cold start**: ~50ms
-- **Trimming**: `<PublishTrimmed>true</PublishTrimmed>` — unused code elided
-- **Reflection-free**: All JSON, JWT, and Dapper types registered in source generators
-
-### AOT Constraints We Embrace
-
-- No `Activator.CreateInstance`
-- No `Type.GetType`
-- No `JsonSerializer.Serialize(object)` — always use `JsonTypeInfo<T>`
-- No runtime lambdas in `MapPost`/`MapGet` — pass method groups directly
-- All DTOs registered in `AppJsonSerializerContext`
-
-## Testing Strategy
+## Testing
 
 Because dependencies are explicit `Func<>` parameters, testing requires **no mocking framework**:
 
@@ -202,7 +136,6 @@ Because dependencies are explicit `Func<>` parameters, testing requires **no moc
 [Test]
 public async Task LoginAsync_WithValidCredentials_ReturnsToken()
 {
-    // Arrange: pure functions, just pass what you need
     var result = await UserService.LoginAsync(
         findByEmail: (email, ct) => Task.FromResult(new UserDto(1, "Alice", email, "hash")),
         verifyPassword: (p, h) => true,
@@ -211,7 +144,6 @@ public async Task LoginAsync_WithValidCredentials_ReturnsToken()
         cmd: new LoginCmd("alice@example.com", "password"),
         CancellationToken.None);
 
-    // Assert
     result.IsSuccess.Should().BeTrue();
     result.Value!.Token.Should().Be("mock-token");
 }
@@ -219,37 +151,40 @@ public async Task LoginAsync_WithValidCredentials_ReturnsToken()
 
 No `Moq`, no `TestServer`, no `WebApplicationFactory`. Just C#.
 
-## Endpoints
+## Running / Publishing
 
-| Method | Path | Returns | Errors |
-|--------|------|---------|--------|
-| POST | `/users` | `UserDto` | 400 (validation), 409 (email exists) |
-| GET | `/users` | `UserDto[]` | — |
-| GET | `/users/{id}` | `UserDto` | 404 |
-| POST | `/login` | `AuthToken` | 401 |
-
-## Running
+### Development
 
 ```bash
-# Debug
 dotnet run
-
-# Native AOT
-dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
-./bin/Release/net10.0/linux-x64/publish/FunctionalWebApi
 ```
 
-## Extending
+### Native AOT Publish
 
-**Add a new resource (e.g., Orders):**
+```bash
+dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
+```
 
-1. **Error**: `Errors/ErrorTypes.cs` — `DuplicateOrderError : AppException`
-2. **Model**: `Models/OrderDto.cs` — `record` with `[JsonSerializable]`
-3. **Repository**: `Repositories/OrderRepository.cs` — static methods, Dapper.AOT
-4. **Service**: `Services/OrderService.cs` — pure orchestration
-5. **Endpoints**: `Endpoints/OrderEndpoints.cs` — `MapOrderEndpoints(this WebApplication app)`
-6. **Wire**: `Endpoints/Composition.cs` — `OrderEndpoints.Bind(...)` then `app.MapOrderEndpoints()`
-7. **Add types** to `AppJsonSerializerContext`
+This produces a self-contained binary in `bin/Release/net10.0/linux-x64/publish/FunctionalWebApi` with no external runtime dependency.
+
+### Trimming
+
+`<PublishTrimmed>true</PublishTrimmed>` is inherited from `<PublishAot>true`. The linker analyzes all code paths reachable from the entry point and removes everything else. DTOs used in JSON, JWT, or Dapper must be explicitly rooted in `AppJsonSerializerContext`. Anything only reached via reflection is removed — which is desirable, unless you actually needed it.
+
+### Target Architectures
+
+- `linux-x64` — primary target; tested and verified
+- `linux-arm64` — change `RuntimeIdentifier` to `linux-arm64`
+- `win-x64` / `win-arm64` — supported by the runtime, not the primary development target
+
+### What AOT Forbids
+
+These are not limitations. They are guardrails that remove entire classes of runtime bugs:
+
+- No `Activator.CreateInstance`
+- No `Type.GetType`
+- No `JsonSerializer.Serialize(object)` — always use `JsonTypeInfo<T>`
+- No runtime lambdas in `MapPost`/`MapGet` — pass method groups directly
 
 ## License
 
