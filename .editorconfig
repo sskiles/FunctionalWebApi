@@ -1,0 +1,103 @@
+# .editorconfig — FunctionalWebApi coding conventions + documented suppressions
+# https://editorconfig.org
+
+root = true
+
+# ── All files ───────────────────────────────────────────────────────
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# ── C# defaults ─────────────────────────────────────────────────────
+[*.cs]
+
+# Indentation / layout
+indent_style = space
+indent_size = 4
+max_line_length = 120
+
+# Newline preferences
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+
+# Organize usings
+csharp_using_directive_placement = outside_namespace
+dotnet_sort_system_directives_first = true
+
+# var preferences
+csharp_style_var_for_built_in_types = true:silent
+csharp_style_var_when_type_is_apparent = true:silent
+csharp_style_var_elsewhere = false:silent
+
+# Expression-bodied members
+csharp_style_expression_bodied_methods = true:silent
+csharp_style_expression_bodied_local_functions = true:silent
+
+# Null / nullable — <Nullable>enable</Nullable> is on. Keep NRT analysis
+# active; do not suppress nullable warnings globally.
+
+# ── Suppressed diagnostics (documented) ────────────────────────────
+#
+# This section is the *canonical, human-readable* rationale for every
+# warning we intentionally suppress. Mirror the suppression in
+# FunctionalWebApi.csproj's <NoWarn> node when an entry is not honoured
+# by `dotnet build` (Roslyn analyzer severity entries below are picked
+# up by the IDE and by `dotnet build` for analyzer-emitted diagnostics;
+# NU1903 is an MSBuild-level audit warning and must be tagged in .csproj).
+#
+#   CS9270   Dapper.AOT source generator emits
+#            `InterceptsLocationAttribute(string, int, int)` on generated
+#            interceptor methods. The current preview runtime does not yet
+#            surface that attribute (it has been superseded by
+#            `InterceptableLocation` in a later runtime preview). Wait for
+#            an updated Dapper.AOT prerelease that migrates to
+#            `InterceptableLocation`. Not a bug in our project.
+#
+#   NU1903   Transitive vulnerability advisory in
+#            `SQLitePCLRaw.lib.e_sqlite3` 2.1.10. The SQLite package is
+#            pulled in transitively by `Microsoft.Data.Sqlite`; the next
+#            safe release is gated to the next major ASP.NET Core / runtime
+#            migration. We accept the risk because the binary ships
+#            statically linked and our threat model does not include
+#            attacker-controlled SQLite native library replacement in a
+#            self-contained AOT image.
+#
+#   IL2104   Trimmer reports a call from non-trim-safe code into a method
+#            annotated with `[RequiresUnreferencedCode]`. In practice this
+#            is a false positive for the SQLite P/Invoke blittable-struct
+#            path; the runtime still emits the correct native transition
+#            for our self-contained AOT configuration.
+#
+#   IL3053   Similar to IL2104: the trimmer flags a call that crosses the
+#            managed↔native boundary through a function pointer. Known
+#            false positive for our `Microsoft.Data.Sqlite` + AOT setup;
+#            the affected call site has been review-confirmed to be
+#            trimming-safe under our `<PublishAot>true</PublishAot>`
+#            configuration.
+#
+# These suppressions are scoped to the project root. If a *new* code path
+# ever emits one of these diagnostics, investigate first instead of
+# extending the suppress list.
+#
+# IDE / Roslyn analyzer severity (honored by the IDE and by
+# `dotnet build` for analyzer-emitted diagnostics):
+#
+dotnet_diagnostic.CS9270.severity = none
+dotnet_diagnostic.IL2104.severity = none
+dotnet_diagnostic.IL3053.severity = none
+#
+# NU1903 is an MSBuild-time audit warning and cannot be lowered via
+# .editorconfig; it is suppressed by `<NoWarn>NU1903</NoWarn>` in
+# FunctionalWebApi.csproj. Tamper the rationale comment there if you
+# change your mind.
+
+# ── Analyzer categories (defaults restated for visibility) ─────────
+dotnet_analyzer_diagnostic.category-Style.severity       = suggestion
+dotnet_analyzer_diagnostic.category-Performance.severity  = suggestion
+dotnet_analyzer_diagnostic.category-Reliability.severity  = suggestion
+dotnet_analyzer_diagnostic.category-Security.severity     = suggestion
+dotnet_analyzer_diagnostic.category-CodeQuality.severity  = suggestion

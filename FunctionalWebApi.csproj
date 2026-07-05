@@ -4,20 +4,25 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>FunctionalWebApi</AssemblyName>
+    <RootNamespace>FunctionalWebApi</RootNamespace>
     <InterceptorsNamespaces>$(InterceptorsNamespaces);Dapper.AOT</InterceptorsNamespaces>
     <PublishAot>true</PublishAot>
     <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <OptimizationPreference>Speed</OptimizationPreference>
     <!--
-      Warnings suppressed:
-       * CS9270: emitted by Dapper.AOT's source generator when it emits
-         InterceptsLocationAttribute. Wait for an updated Dapper.AOT prerelease
-         that uses InterceptableLocation.
-       * NU1903: transitive `SQLitePCRLaw.lib.e_sqlite3` 2.1.10 vulnerability —
-         upgrade is gated to the next major runtime migration.
+      Warning suppression rationale is mirrored from .editorconfig so it is
+      visible to both humans and build tooling. Keep this list in sync with
+      `dotnet_diagnostic.*.severity` entries in .editorconfig.
+        CS9270  Dapper.AOT generator emits InterceptsLocationAttribute — known
+                issue, awaiting Dapper.AOT update to InterceptableLocation.
+                (also suppressed in .editorconfig)
+        NU1903  Transitive SQLitePCL.raw.c.vbstcore vulnerability advisory;
+                gated to the next major runtime migration, no attacker
+                control of native binaries in self-contained AOT.
     -->
-    <NoWarn>CS9270;NU1903;IL2104;IL3053</NoWarn>
+    <NoWarn>NU1903</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

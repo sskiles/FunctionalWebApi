@@ -1,6 +1,6 @@
 using Dapper;
 
-namespace MyApi.Models;
+namespace FunctionalWebApi.Models;
 
 /// <summary>
 /// Represents a user in the system.

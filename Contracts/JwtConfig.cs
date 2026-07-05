@@ -1,4 +1,4 @@
-namespace MyApi.Contracts;
+namespace FunctionalWebApi.Contracts;
 
 /// <summary>
 /// Plain data object for JWT configuration.

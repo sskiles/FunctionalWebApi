@@ -1,6 +1,6 @@
-using MyApi.Contracts;
-using MyApi.Errors;
-using MyApi.Models;
+using FunctionalWebApi.Contracts;
+using FunctionalWebApi.Errors;
+using FunctionalWebApi.Models;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
@@ -8,12 +8,12 @@ using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using JwtReg = Microsoft.IdentityModel.JsonWebTokens.JwtRegisteredClaimNames;
 
-namespace MyApi.Services;
+namespace FunctionalWebApi.Services;
 
 /// <summary>
 /// Stateless service layer for user-facing operations. Failures throw
 /// <see cref="AppException"/>-derived types; the request pipeline converts
-/// them to HTTP responses via <see cref="MyApi.DomainErrorHandler"/>.
+/// them to HTTP responses via <see cref="FunctionalWebApi.Domain.DomainErrorHandler"/>.
 /// </summary>
 public static class UserService
 {
@@ -76,7 +76,7 @@ public static class UserService
     /// and persists the user through the repository.
     ///
     /// Throws <see cref="ValidationError"/> for any input problem and
-    /// <see cref="AppException"/>‑derived DB errors from <see cref="MyApi.Repositories.UserRepository"/>.
+    /// <see cref="AppException"/>‑derived DB errors from <see cref="FunctionalWebApi.Repositories.UserRepository"/>.
     /// </summary>
     public static async Task<UserDto> CreateUserAsync(
         CreateUserCmd cmd,
@@ -92,15 +92,15 @@ public static class UserService
             // Constant‑time equality check: identical inputs produce identical
             // PBKDF2 digests (deterministic salt); mismatches yield constant‑time
             // rejection. `AreEqual` wipes both buffers for us.
-            if (!MyApi.Security.ArgumentPasswordHasher.AreEqual(password, confirmPassword))
+            if (!FunctionalWebApi.Security.ArgumentPasswordHasher.AreEqual(password, confirmPassword))
                 throw new ValidationError(new Dictionary<string, string[]>
                 {
                     ["confirmPassword"] = new[] { "Password confirmation does not match." }
                 });
 
             // Hand a fresh plaintext to the repository; it will hash + clear.
-            var user = await MyApi.Repositories.UserRepository.CreateAsync(
-                connectionString: MyApi.Composition.ConnectionString!,
+            var user = await FunctionalWebApi.Repositories.UserRepository.CreateAsync(
+                connectionString: FunctionalWebApi.Composition.ConnectionString!,
                 name:             cmd.Name,
                 email:            cmd.Email,
                 passwordChars:    cmd.Password.ToCharArray()); // repository hashes & clears

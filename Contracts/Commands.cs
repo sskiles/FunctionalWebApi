@@ -1,4 +1,4 @@
-namespace MyApi.Contracts;
+namespace FunctionalWebApi.Contracts;
 
 /// <summary>
 /// Command used to create a new user.

@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using MyApi.Errors;
+using FunctionalWebApi.Errors;
 
-namespace MyApi.Domain;
+namespace FunctionalWebApi.Domain;
 
 /// <summary>
 /// Maps domain exceptions to HTTP response shapes:

@@ -1,9 +1,9 @@
 using Dapper;
 using Microsoft.Data.Sqlite;
-using MyApi.Errors;
-using MyApi.Models;
+using FunctionalWebApi.Errors;
+using FunctionalWebApi.Models;
 
-namespace MyApi.Repositories;
+namespace FunctionalWebApi.Repositories;
 
 public static class UserRepository
 {
@@ -32,7 +32,7 @@ public static class UserRepository
             throw new ValidationError(new Dictionary<string, string[]> { ["email"] = ["Email format invalid."] });
 
         // Hash the password and immediately clear the plaintext buffer.
-        var storedHash = MyApi.Security.ArgumentPasswordHasher.Hash(passwordChars);
+        var storedHash = FunctionalWebApi.Security.ArgumentPasswordHasher.Hash(passwordChars);
         // `Hash` clears the buffer as part of its contract; just being defensive.
         Array.Clear(passwordChars, 0, passwordChars.Length);
 
@@ -89,7 +89,7 @@ public static class UserRepository
 
         // Hand off to the same hasher that stored the value. The
         // plaintext‑to‑array buffer is consumed deterministically.
-        var verified = MyApi.Security.ArgumentPasswordHasher.Verify(passwordChars, row?.PasswordHash ?? "");
+        var verified = FunctionalWebApi.Security.ArgumentPasswordHasher.Verify(passwordChars, row?.PasswordHash ?? "");
 
         return verified ? row : null;
     }

@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
-using MyApi.Contracts;
-using MyApi.Endpoints;
-using MyApi.Repositories;
+using FunctionalWebApi.Contracts;
+using FunctionalWebApi.Endpoints;
+using FunctionalWebApi.Repositories;
 
-namespace MyApi;
+namespace FunctionalWebApi;
 
 /// <summary>
 /// Composition root: reads configuration, wires the user endpoints' data and

@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Cryptography.KeyDerivation;
 
-namespace MyApi.Security;
+namespace FunctionalWebApi.Security;
 
 /// <summary>
 /// PBKDF2‑HMAC‑SHA256 password hasher. The stored format is the

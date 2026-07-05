@@ -1,4 +1,4 @@
-# MyApi — Functional, Native-AOT Web API
+# FunctionalWebApi — Functional, Native-AOT Web API
 
 A minimal, production-ready ASP.NET Core 10 Web API built with a **purely functional** architecture, targeting **Native AOT** from day one.
 
@@ -6,7 +6,7 @@ A minimal, production-ready ASP.NET Core 10 Web API built with a **purely functi
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         MyApi (Native AOT)                          │
+│                         FunctionalWebApi (Native AOT)                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Program.cs ──► Endpoints/Composition.cs ──► Endpoints/UserEndpoints│
 │                      │                       │                      │
@@ -25,15 +25,15 @@ A minimal, production-ready ASP.NET Core 10 Web API built with a **purely functi
 
 | Folder | Namespace | Responsibility |
 |--------|-----------|----------------|
-| `Contracts/` | `MyApi.Contracts` | Transport types: `LoginCmd`, `CreateUserCmd`, `AuthToken`, `JwtConfig` — pure DTOs, no behaviour |
-| `Domain/` | `MyApi.Domain` (global) | Core algebraic types: `Result<T,E>`, `ResultCollection<T,E>`, `AppException` hierarchy (`NotFoundError`, `AuthError`, `ValidationError`, `SqlError`). Pure data, no I/O. |
-| `Errors/` | `MyApi.Errors` | Exception hierarchy rooted in `AppException : Exception`. Domain errors are `Exception` subclasses so they participate in the global exception handler. |
-| `Models/` | `MyApi.Models` | Domain DTOs: `UserDto` (serialisable, no logic). |
-| `Security/` | `MyApi.Security` | PBKDF2-HMAC-SHA256 password hashing (`ArgumentPasswordHasher`) with constant-time compare. |
-| `Repositories/` | `MyApi.Repositories` | Data access. `UserRepository` uses Dapper.AOT + `Microsoft.Data.Sqlite`. Static, stateless, connection-string scoped. |
-| `Services/` | `MyApi.Services` | Business logic. `UserService.LoginAsync` orchestrates constant-time password check + JWT issuance. |
-| `Endpoints/` | `MyApi.Endpoints` | HTTP surface. `UserEndpoints.cs` defines routes, `Composition.cs` wires config → delegates. |
-| `Domain/` | `MyApi.Domain` | Domain errors + global exception handler (`DomainErrorHandler : IExceptionHandler`). |
+| `Contracts/` | `FunctionalWebApi.Contracts` | Transport types: `LoginCmd`, `CreateUserCmd`, `AuthToken`, `JwtConfig` — pure DTOs, no behaviour |
+| `Domain/` | `FunctionalWebApi.Domain` (global) | Core algebraic types: `Result<T,E>`, `ResultCollection<T,E>`, `AppException` hierarchy (`NotFoundError`, `AuthError`, `ValidationError`, `SqlError`). Pure data, no I/O. |
+| `Errors/` | `FunctionalWebApi.Errors` | Exception hierarchy rooted in `AppException : Exception`. Domain errors are `Exception` subclasses so they participate in the global exception handler. |
+| `Models/` | `FunctionalWebApi.Models` | Domain DTOs: `UserDto` (serialisable, no logic). |
+| `Security/` | `FunctionalWebApi.Security` | PBKDF2-HMAC-SHA256 password hashing (`ArgumentPasswordHasher`) with constant-time compare. |
+| `Repositories/` | `FunctionalWebApi.Repositories` | Data access. `UserRepository` uses Dapper.AOT + `Microsoft.Data.Sqlite`. Static, stateless, connection-string scoped. |
+| `Services/` | `FunctionalWebApi.Services` | Business logic. `UserService.LoginAsync` orchestrates constant-time password check + JWT issuance. |
+| `Endpoints/` | `FunctionalWebApi.Endpoints` | HTTP surface. `UserEndpoints.cs` defines routes, `Composition.cs` wires config → delegates. |
+| `Domain/` | `FunctionalWebApi.Domain` | Domain errors + global exception handler (`DomainErrorHandler : IExceptionHandler`). |
 
 ### Dependency Direction (Strict)
 
@@ -78,7 +78,7 @@ Program.cs (host)
 
 ```bash
 # Requirements: .NET 10 SDK (preview), SQLite
-cd MyApi
+cd FunctionalWebApi
 dotnet run
 # → http://localhost:5000
 ```
@@ -113,21 +113,21 @@ curl -X POST http://localhost:5000/login \
 
 ```bash
 # Debug (JIT)
-dotnet run --project MyApi.csproj
+dotnet run --project FunctionalWebApi.csproj
 
 # Native AOT publish (linux-x64)
 dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
-./bin/Release/net10.0/linux-x64/publish/MyApi
+./bin/Release/net10.0/linux-x64/publish/FunctionalWebApi
 ```
 
 ### Native AOT
 
 ```bash
 dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
-./bin/Release/net10.0/linux-x64/publish/MyApi
+./bin/Release/net10.0/linux-x64/publish/FunctionalWebApi
 ```
 
-- **Stripped native binary**: ~18 MB (`MyApi`), no `dotnet` runtime required.
+- **Stripped native binary**: ~18 MB (`FunctionalWebApi`), no `dotnet` runtime required.
 - **Trimming**: Enabled (`<PublishTrimmed>true</PublishTrimmed>`). `NoWarn` in `.csproj` silences known false-positives (`CS9270` Dapper interceptors, `NU1903` SQLite P/Invoke).
 - Works on Linux x64; ARM64 via `-p:RuntimeIdentifier=linux-arm64`.
 
@@ -150,7 +150,7 @@ Recommended test targets:
 ### Folder Structure
 
 ```
-MyApi/
+FunctionalWebApi/
 ├── Contracts/           # API payload types
 │   ├── Commands.cs
 │   └── JwtConfig.cs
@@ -207,7 +207,7 @@ MyApi/
 │   └── ErrorTypes.cs
 ├── Program.cs
 ├── DapperAot.cs
-├── MyApi.csproj
+├── FunctionalWebApi.csproj
 └── appsettings.json
 ```
 

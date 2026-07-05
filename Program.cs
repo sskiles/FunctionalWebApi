@@ -4,10 +4,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ResultType;
-using MyApi;
-using MyApi.Errors;
-using MyApi.Models;
-using MyApi.Contracts;
+using FunctionalWebApi;
+using FunctionalWebApi.Errors;
+using FunctionalWebApi.Models;
+using FunctionalWebApi.Contracts;
 using Dapper;
 using Microsoft.Data.Sqlite;
 
@@ -22,7 +22,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options =
 });
 
 // Domain exceptions are translated to HTTP responses by DomainErrorHandler.
-builder.Services.AddExceptionHandler<MyApi.Domain.DomainErrorHandler>();
+builder.Services.AddExceptionHandler<FunctionalWebApi.Domain.DomainErrorHandler>();
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();

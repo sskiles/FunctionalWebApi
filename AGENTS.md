@@ -1,4 +1,4 @@
-# MyApi — Agent Reference
+# FunctionalWebApi — Agent Reference
 
 Native-AOT-ready ASP.NET Core 10 Web API. Functional architecture, discriminated-union error handling, zero-reflection.
 
@@ -12,7 +12,7 @@ dotnet run
 dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
 
 # Run AOT binary
-./bin/Release/net10.0/linux-x64/publish/MyApi
+./bin/Release/net10.0/linux-x64/publish/FunctionalWebApi
 
 # Test (no test project yet — recommended targets below)
 ```
@@ -34,14 +34,14 @@ Program.cs                                   # host entry
 
 | Folder | Namespace | Contents |
 |--------|-----------|----------|
-| `Contracts/` | `MyApi.Contracts` | `LoginCmd`, `CreateUserCmd`, `AuthToken`, `JwtConfig` — DTOs only |
-| `Domain/` | `MyApi.Domain` (global) | `Result<T,E>`, `ResultCollection<T,E>`, `AppException` hierarchy, `DomainErrorHandler` |
-| `Errors/` | `MyApi.Errors` | `AppException` base + concrete exceptions (`NotFoundError`, `AuthError`, `ValidationError`, `SqlError`) |
-| `Models/` | `MyApi.Models` | `UserDto` (and future domain entities) |
-| `Security/` | `MyApi.Security` | `ArgumentPasswordHasher` — PBKDF2-HMAC-SHA256, 600k iterations, constant-time verify |
-| `Repositories/` | `MyApi.Repositories` | `UserRepository` — Dapper.AOT + `Microsoft.Data.Sqlite`, static methods |
-| `Services/` | `MyApi.Services` | `UserService` — orchestrating, returns `Result<,>` or throws |
-| `Endpoints/` | `MyApi.Endpoints` | `UserEndpoints.cs` (handlers + MapMethod), `Composition.cs` (host wiring), `AppJsonSerializerContext.cs` |
+| `Contracts/` | `FunctionalWebApi.Contracts` | `LoginCmd`, `CreateUserCmd`, `AuthToken`, `JwtConfig` — DTOs only |
+| `Domain/` | `FunctionalWebApi.Domain` (global) | `Result<T,E>`, `ResultCollection<T,E>`, `AppException` hierarchy, `DomainErrorHandler` |
+| `Errors/` | `FunctionalWebApi.Errors` | `AppException` base + concrete exceptions (`NotFoundError`, `AuthError`, `ValidationError`, `SqlError`) |
+| `Models/` | `FunctionalWebApi.Models` | `UserDto` (and future domain entities) |
+| `Security/` | `FunctionalWebApi.Security` | `ArgumentPasswordHasher` — PBKDF2-HMAC-SHA256, 600k iterations, constant-time verify |
+| `Repositories/` | `FunctionalWebApi.Repositories` | `UserRepository` — Dapper.AOT + `Microsoft.Data.Sqlite`, static methods |
+| `Services/` | `FunctionalWebApi.Services` | `UserService` — orchestrating, returns `Result<,>` or throws |
+| `Endpoints/` | `FunctionalWebApi.Endpoints` | `UserEndpoints.cs` (handlers + MapMethod), `Composition.cs` (host wiring), `AppJsonSerializerContext.cs` |
 
 ## Adding a New Resource (e.g. Orders)
 
@@ -129,7 +129,7 @@ private static async Task<UserDto> Create(CreateUserCmd cmd, CancellationToken c
 
 ## Dapper.AOT Setup
 
-1. Project property: `<DapperAotInterceptorsNamespaces>MyApi.Repositories</DapperAotInterceptorsNamespaces>`
+1. Project property: `<DapperAotInterceptorsNamespaces>FunctionalWebApi.Repositories</DapperAotInterceptorsNamespaces>`
 2. `[DapperAot]` on every entity that has Dapper extensions generated
 3. `UserDto` is bound by `[DapperAot]` + `[DapperAot("...")]` for SQL strings
 4. **Trim/AOT**: `<PublishTrimmed>true</PublishTrimmed>`, suppress `CS9270` (Dapper interceptors), `NU1903` (SQLite native P/Invoke)
@@ -142,7 +142,7 @@ private static async Task<UserDto> Create(CreateUserCmd cmd, CancellationToken c
 - **No `await using dynamic` / IL-emit** libraries
 - All types reachable from JSON, JWT, Dapper, MVC are explicitly registered in source generators
 
-## Packages (in MyApi.csproj)
+## Packages (in FunctionalWebApi.csproj)
 
 - `Microsoft.AspNetCore.OpenApi` (removed for Swaggerless mode — comments only)
 - `Dapper` + `Dapper.AOT` (source-gen)
@@ -151,7 +151,7 @@ private static async Task<UserDto> Create(CreateUserCmd cmd, CancellationToken c
 - `System.Text.Json` (source-gen via `AppJsonSerializerContext`)
 - `Microsoft.AspNetCore.App` framework reference (transitive AOT support)
 
-Configure `<RootNamespace>MyApi</RootNamespace>`, `<ImplicitUsings>enable</ImplicitUsings>`.
+Configure `<RootNamespace>FunctionalWebApi</RootNamespace>`, `<ImplicitUsings>enable</ImplicitUsings>`.
 
 ## Current Endpoints
 
@@ -228,7 +228,7 @@ Test project tooling: `xunit`, `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstu
 ## Quick File Tree
 
 ```
-MyApi/
+FunctionalWebApi/
 ├── Contracts/Commands.cs
 ├── Contracts/JwtConfig.cs
 ├── Domain/Result.cs
@@ -244,6 +244,6 @@ MyApi/
 ├── Endpoints/AppJsonSerializerContext.cs
 ├── Program.cs                          # WebApplication.CreateBuilder, bind
 ├── DapperAot.cs                        # [assembly: DapperAot]
-├── MyApi.csproj
+├── FunctionalWebApi.csproj
 └── appsettings.json
 ```

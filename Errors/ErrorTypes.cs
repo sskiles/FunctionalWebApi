@@ -1,4 +1,4 @@
-namespace MyApi.Errors;
+namespace FunctionalWebApi.Errors;
 
 /// <summary>
 /// Base type for all domain errors. Subclasses of <see cref="Exception"/> flow

@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Mvc;
-using MyApi.Contracts;
-using MyApi.Models;
-using MyApi.Services;
-using MyApi.Repositories;
+using FunctionalWebApi.Contracts;
+using FunctionalWebApi.Models;
+using FunctionalWebApi.Services;
+using FunctionalWebApi.Repositories;
 
-namespace MyApi.Endpoints;
+namespace FunctionalWebApi.Endpoints;
 
 /// <summary>
 /// HTTP endpoints for user accounts: registration, authentication, and lookup.
@@ -73,7 +73,7 @@ public static class UserEndpoints
     // --- handler bodies ---------------------------------------------------
     // Each handler is plain code that calls the domain services / repository.
     // Failures are propagated as exceptions and translated by
-    // <see cref="MyApi.Domain.DomainErrorHandler"/>.
+    // <see cref="FunctionalWebApi.Domain.DomainErrorHandler"/>.
 
     private static async Task<IResult> Login(LoginCmd cmd)
     {
