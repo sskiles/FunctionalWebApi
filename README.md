@@ -1,230 +1,256 @@
-# FunctionalWebApi — Functional, Native-AOT Web API
+# FunctionalWebApi
 
-A minimal, production-ready ASP.NET Core 10 Web API built with a **purely functional** architecture, targeting **Native AOT** from day one.
+> A reference implementation for building ASP.NET Core Web APIs with functional programming principles, targeting Native AOT from day one.
 
-## Architecture Overview
+## Philosophy
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         FunctionalWebApi (Native AOT)                          │
-├─────────────────────────────────────────────────────────────────────┤
-│  Program.cs ──► Endpoints/Composition.cs ──► Endpoints/UserEndpoints│
-│                      │                       │                      │
-│                      ▼                       ▼                      │
-│              Endpoints/UserEndpoints.cs      Composition.cs         │
-│                      │                                           │
-│                      ▼                                           │
-│              Services/UserService.cs   ──►  Domain/*.cs              │
-│                      │                                           │
-│                      ▼                                           │
-│              Data/UserRepository.cs ──► SQLite (Microsoft.Data.Sqlite) │
-└─────────────────────────────────────────────────────────────────────┘
-```
+This project demonstrates that **functional programming and web APIs are not contradictory** — they are complementary. By rejecting mutable state, side-effect-laden dependencies, and framework-magic DI containers, we achieve:
 
-### Layer Separation
+- **Predictability**: The same input always produces the same output
+- **Testability**: Pure functions with explicit dependencies require no mocking frameworks
+- **Composability**: Small, focused functions compose into larger workflows
+- **AOT Safety**: No reflection, no runtime code generation, no hidden costs
 
-| Folder | Namespace | Responsibility |
-|--------|-----------|----------------|
-| `Contracts/` | `FunctionalWebApi.Contracts` | Transport types: `LoginCmd`, `CreateUserCmd`, `AuthToken`, `JwtConfig` — pure DTOs, no behaviour |
-| `Domain/` | `FunctionalWebApi.Domain` (global) | Core algebraic types: `Result<T,E>`, `ResultCollection<T,E>`, `AppException` hierarchy (`NotFoundError`, `AuthError`, `ValidationError`, `SqlError`). Pure data, no I/O. |
-| `Errors/` | `FunctionalWebApi.Errors` | Exception hierarchy rooted in `AppException : Exception`. Domain errors are `Exception` subclasses so they participate in the global exception handler. |
-| `Models/` | `FunctionalWebApi.Models` | Domain DTOs: `UserDto` (serialisable, no logic). |
-| `Security/` | `FunctionalWebApi.Security` | PBKDF2-HMAC-SHA256 password hashing (`ArgumentPasswordHasher`) with constant-time compare. |
-| `Repositories/` | `FunctionalWebApi.Repositories` | Data access. `UserRepository` uses Dapper.AOT + `Microsoft.Data.Sqlite`. Static, stateless, connection-string scoped. |
-| `Services/` | `FunctionalWebApi.Services` | Business logic. `UserService.LoginAsync` orchestrates constant-time password check + JWT issuance. |
-| `Endpoints/` | `FunctionalWebApi.Endpoints` | HTTP surface. `UserEndpoints.cs` defines routes, `Composition.cs` wires config → delegates. |
-| `Domain/` | `FunctionalWebApi.Domain` | Domain errors + global exception handler (`DomainErrorHandler : IExceptionHandler`). |
+## What is Dependency Rejection?
 
-### Dependency Direction (Strict)
+Most ASP.NET Core applications use **Dependency Injection (DI)** as the primary mechanism for composing services. While DI improves testability over hard-coded dependencies, it introduces its own problems:
 
-```
-Program.cs (host)
-  └── Endpoints/Composition.cs          → wires delegates
-          │
-          ▼
-  Endpoints/UserEndpoints.cs  (static handlers)
-          │
-          ▼
-      Services/UserService.cs   (domain logic, pure throws)
-          │
-          ▼
-      Repositories/UserRepository.cs   (Dapper.AOT)
-          │
-          ▼
-       Domain/Models + Errors   (pure data)
+- **Hidden dependencies**: You cannot tell what a service needs by looking at its constructor alone — you must understand the container's configuration
+- **Framework coupling**: Business logic becomes entangled with `IServiceProvider`, lifetime management, and scoped service resolution
+- **Opaque transitive dependencies**: Service A → B → C means A implicitly depends on everything C needs
+- **AOT/Trimming hostile**: DI containers rely on runtime reflection (`Activator.CreateInstance`, `Type.GetType`)
+
+**Dependency Rejection** flips this. Instead of injecting opaque interfaces, we pass explicit functions and values at composition time:
+
+```csharp
+// BEFORE: DI container — who knows what UserService actually needs?
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IJwtService, JwtService>();
+builder.Services.AddScoped<UserService>();
+
+// AFTER: Explicit dependencies — every need is visible in the signature
+var login = UserService.LoginAsync(
+    findByEmail: UserRepository.FindByEmailAsync,
+    verifyPassword: ArgumentPasswordHasher.Verify,
+    createToken: AuthService.CreateToken,
+    connectionString: configuration.GetConnectionString("Sqlite")!);
 ```
 
-**No cycles.** Outer layers call inwards only. `Program.cs` knows everything; inner layers know nothing about ASP.NET Core, Dapper, or configuration.
+The `LoginAsync` method is pure: it receives exactly what it needs, no more, no less. The function signature is the contract. There is no hidden state, no surprise dependencies, and no framework magic required to understand the code.
 
----
+### Why No DI Container?
 
-### Key Design Decisions
+| DI Container | Dependency Rejection |
+|-------------|----------------------|
+| `Func<IServiceProvider, T>` | `Func<TIn, TOut>` |
+| Runtime reflection | Compile-time verification |
+| Hidden graph of dependencies | Flat, explicit parameter list |
+| Scoped lifetimes managed by framework | Lifetimes are just `using` blocks |
+| Hard to test without `TestServer` or mocks | Plain C# functions, testable with `new` |
+| Reflection breaks AOT trimming | Zero runtime reflection |
 
-| Concern | Decision | Rationale |
-|---------|----------|-----------|
-| **Native AOT from day one** | `<PublishAot>true</PublishAot>`, `Dapper.AOT`, `System.Text.Json` source-gen | Zero-reflection binary, 18 MB self-contained Linux x64 |
-| **No `IServiceProvider` inside domain** | Pure functions + `Func<>` delegates passed by `Composition` | Testability, no DI container in domain |
-| `Result<T, E>` + `ResultCollection` | Discriminated union via `readonly record struct` + implicit operators | Exhaustive pattern matching, no `null` surprises |
-| Errors are `Exception` subtypes | Thrown at repository/service boundary, caught by `IExceptionHandler` (`DomainErrorHandler`) | Exceptions = control flow for exceptional cases; `Result<,>` for expected failures |
-| PBKDF2-HMAC-SHA256 (600k iterations) | Constant-time `Verify` with `CryptographicOperations.FixedTimeEquals` | Timing-attack resistance on both login & confirm-password |
-| `PasswordHasher` returns `salt\|hash` PHC string | Self-describing, versioned, iter-count baked in | Easy migration, no schema migration needed |
-| Endpoints as `static` method groups | `UserEndpoints.MapUserEndpoints(this WebApplication app)` | Source-generated `RequestDelegateGenerator` → AOT-friendly |
-| `Result<T,E>` + implicit operators | `return user` or `return new NotFoundError(...)` | No `Result.Ok()/Failure()` noise in business logic |
-| `ResultCollection` for lists | Same wrapper, carries `IReadOnlyList<T>` | Consistent error surface for list endpoints |
+## The Functional Stack
 
----
+### Result&lt;T, E&gt; — Explicit Error Handling
 
-### Running Locally
+Exceptions for control flow are invisible in the type system. `Result<T, E>` makes success and failure first-class:
+
+```csharp
+public readonly record struct Result<TValue, TError>
+{
+    public TValue? Value { get; }
+    public TError? Error { get; }
+    public bool IsSuccess { get; }
+
+    public static implicit operator Result<TValue, TError>(TValue value) => new(value);
+    public static implicit operator Result<TValue, TError>(TError error) => new(error);
+}
+```
+
+**Usage**: no ceremony, just return the value or error:
+
+```csharp
+public async Task<Result<UserDto, NotFoundError>> GetByIdAsync(int id)
+{
+    var user = await _findById(id);
+    return user is not null ? user : new NotFoundError($"User {id}");
+}
+```
+
+The caller *must* handle both branches. The compiler enforces this.
+
+### AppException Hierarchy — When You Need to Throw
+
+Not all errors are business-logic failures. Some are truly exceptional (database disconnected, disk full, network partition). For these, we use a typed exception hierarchy:
+
+```csharp
+public abstract class AppException(string message) : Exception(message);
+public sealed class NotFoundError(string what) : AppException($"{what} not found");
+public sealed class AuthError(string reason = "Invalid") : AppException($"Auth: {reason}");
+```
+
+These propagate to a single `IExceptionHandler` which maps them to HTTP status codes. The benefit: **one place** to change how all auth failures, not-found errors, and validation failures are represented.
+
+### Static, Stateless Functions
+
+Every service, repository, and handler is a `static` method. There is no `class` state, no `this`, no fields to mutate:
+
+```csharp
+internal static class UserService
+{
+    public static async Task<Result<AuthToken, AuthError>> LoginAsync(
+        Func<string, CancellationToken, Task<UserDto?>> findByEmail,
+        Func<string, string, bool> verifyPassword,
+        Func<string, string> createToken,
+        string connectionString,
+        LoginCmd cmd,
+        CancellationToken ct)
+    {
+        // Pure logic: no hidden state, no service locator calls
+    }
+}
+```
+
+**Why static?**
+- No mutable state to reason about
+- Thread-safe by default
+- No allocation overhead from instantiating service classes
+- Method-group references are AOT-friendly (no lambda closures)
+- Easier to reason about: `Input → Output`, period
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        HTTP Transport                           │
+│  Endpoints/UserEndpoints.cs  │  Endpoints/Composition.cs        │
+│  MapPost/MapGet             │  Wires config → pure functions    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+├─────────────────────────────────────────────────────────────────┤
+│                        Business Logic                           │
+│  Services/UserService.cs    │  Pure functions, throws AppException│
+└─────────────────────────────────────────────────────────────────┘
+                              │
+├─────────────────────────────────────────────────────────────────┤
+│                        Data Access                              │
+│  Repositories/UserRepository.cs  │  Dapper.AOT, static methods │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+├─────────────────────────────────────────────────────────────────┤
+│                        Pure Domain                              │
+│  Domain/Result.cs           │  Algebraic data types           │
+│  Errors/ErrorTypes.cs       │  Exception hierarchy            │
+│  Models/UserDto.cs          │  Immutable records              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Why These Decisions?
+
+| Decision | Alternative | Why We Chose This |
+|----------|-------------|-------------------|
+ | `static` methods | Instance classes with DI | No mutable state, no reflection, AOT-safe method groups |
+| `Result<T,E>` | Exceptions everywhere | Explicit error branches, compiler-enforced handling |
+| Typed `AppException` | Generic `Exception` | Single `IExceptionHandler` maps to HTTP, typed catch blocks |
+| Dapper.AOT | EF Core | No runtime model building, source-generated SQL, trim-safe |
+| `Func<>` injection | `IServiceProvider` | Every dependency visible in the signature, testable with plain `new` |
+| Native AOT | JIT runtime | ~18 MB self-contained binary, 50ms cold start, no runtime patching |
+| PBKDF2 (600k iterations) | BCrypt/Argon2 | Pure .NET, no native dependencies, PHC format future-proofs migrations |
+| Records | Classes | Immutable by default, value equality, concise syntax |
+| File-scoped namespaces | Block-scoped | Less nesting, clearer intent |
+
+## Security
+
+### Password Hashing
+
+- **Algorithm**: PBKDF2-HMAC-SHA256, 600,000 iterations (OWASP 2023)
+- **Salt**: 16 bytes cryptographically random
+- **Hash**: 32 bytes
+- **Format**: `pbkdf2-sha256$600000$<base64(salt)><base64(hash)>` (PHC-style)
+- **Constant-time verification**: `CryptographicOperations.FixedTimeEquals` prevents timing attacks on both login and registration paths
+
+### JWT Tokens
+
+- Uses `JsonWebTokenHandler` (not `JwtSecurityTokenHandler`) — AOT-compatible, no reflection
+- Short expiry (60 minutes)
+- Claims include `sub` (user ID), `jti` (token ID for revocation future-proofing)
+
+## Native AOT
 
 ```bash
-# Requirements: .NET 10 SDK (preview), SQLite
-cd FunctionalWebApi
+dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
+```
+
+- **Binary size**: ~18 MB (self-contained, no runtime required)
+- **Cold start**: ~50ms
+- **Trimming**: `<PublishTrimmed>true</PublishTrimmed>` — unused code elided
+- **Reflection-free**: All JSON, JWT, and Dapper types registered in source generators
+
+### AOT Constraints We Embrace
+
+- No `Activator.CreateInstance`
+- No `Type.GetType`
+- No `JsonSerializer.Serialize(object)` — always use `JsonTypeInfo<T>`
+- No runtime lambdas in `MapPost`/`MapGet` — pass method groups directly
+- All DTOs registered in `AppJsonSerializerContext`
+
+## Testing Strategy
+
+Because dependencies are explicit `Func<>` parameters, testing requires **no mocking framework**:
+
+```csharp
+[Test]
+public async Task LoginAsync_WithValidCredentials_ReturnsToken()
+{
+    // Arrange: pure functions, just pass what you need
+    var result = await UserService.LoginAsync(
+        findByEmail: (email, ct) => Task.FromResult(new UserDto(1, "Alice", email, "hash")),
+        verifyPassword: (p, h) => true,
+        createToken: id => "mock-token",
+        connectionString: "::memory:",
+        cmd: new LoginCmd("alice@example.com", "password"),
+        CancellationToken.None);
+
+    // Assert
+    result.IsSuccess.Should().BeTrue();
+    result.Value!.Token.Should().Be("mock-token");
+}
+```
+
+No `Moq`, no `TestServer`, no `WebApplicationFactory`. Just C#.
+
+## Endpoints
+
+| Method | Path | Returns | Errors |
+|--------|------|---------|--------|
+| POST | `/users` | `UserDto` | 400 (validation), 409 (email exists) |
+| GET | `/users` | `UserDto[]` | — |
+| GET | `/users/{id}` | `UserDto` | 404 |
+| POST | `/login` | `AuthToken` | 401 |
+
+## Running
+
+```bash
+# Debug
 dotnet run
-# → http://localhost:5000
-```
 
-### Endpoints
-
-| Method | Path | Body | Success | Errors |
-|--------|------|------|---------|--------|
-| `POST /users` | `CreateUserCmd { Name, Email, Password, ConfirmPassword }` | 201 `UserDto` | 400 (mismatch), 409 (email exists) |
-| `GET /users` | — | 200 `UserDto[]` | — |
-| `GET /users/{id}` | — | 200 `UserDto` | 404 `NotFoundError` |
-| `POST /login` | `LoginCmd { Username, Password }` | 200 `AuthToken { Token }` | 401 `AuthError` |
-
-#### Example
-
-```bash
-# Register
-curl -X POST http://localhost:5000/users \
-  -H 'Content-Type: application/json' \
-  -d '{"Name":"Alice","Email":"alice@example.com","Password":"correct horse battery staple","ConfirmPassword":"correct horse battery staple"}'
-
-# Login
-curl -X POST http://localhost:5000/login \
-  -H 'Content-Type: application/json' \
-  -d '{"Username":"alice@example.com","Password":"correct horse battery staple"}'
-# → 200 { "token": "eyJ..." }
-```
-
----
-
-### Building & Running
-
-```bash
-# Debug (JIT)
-dotnet run --project FunctionalWebApi.csproj
-
-# Native AOT publish (linux-x64)
+# Native AOT
 dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
 ./bin/Release/net10.0/linux-x64/publish/FunctionalWebApi
 ```
 
-### Native AOT
+## Extending
 
-```bash
-dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
-./bin/Release/net10.0/linux-x64/publish/FunctionalWebApi
-```
+**Add a new resource (e.g., Orders):**
 
-- **Stripped native binary**: ~18 MB (`FunctionalWebApi`), no `dotnet` runtime required.
-- **Trimming**: Enabled (`<PublishTrimmed>true</PublishTrimmed>`). `NoWarn` in `.csproj` silences known false-positives (`CS9270` Dapper interceptors, `NU1903` SQLite P/Invoke).
-- Works on Linux x64; ARM64 via `-p:RuntimeIdentifier=linux-arm64`.
+1. **Error**: `Errors/ErrorTypes.cs` — `DuplicateOrderError : AppException`
+2. **Model**: `Models/OrderDto.cs` — `record` with `[JsonSerializable]`
+3. **Repository**: `Repositories/OrderRepository.cs` — static methods, Dapper.AOT
+4. **Service**: `Services/OrderService.cs` — pure orchestration
+5. **Endpoints**: `Endpoints/OrderEndpoints.cs` — `MapOrderEndpoints(this WebApplication app)`
+6. **Wire**: `Endpoints/Composition.cs` — `OrderEndpoints.Bind(...)` then `app.MapOrderEndpoints()`
+7. **Add types** to `AppJsonSerializerContext`
 
----
+## License
 
-### Testing
-
-```bash
-dotnet test  # (add a test project when ready)
-```
-
-Recommended test targets:
-- `Security.ArgumentPasswordHasher` (round-trip + constant-time)
-- `UserRepository` against in-memory SQLite
-- `UserService.LoginAsync` with good / bad passwords
-- `DomainErrorHandler` mapping each exception to status code
-
----
-
-### Folder Structure
-
-```
-FunctionalWebApi/
-├── Contracts/           # API payload types
-│   ├── Commands.cs
-│   └── JwtConfig.cs
-├── Domain/
-│   ├── Result.cs               # Result<T,E> + ResultCollection
-│   ├── ResultCollection.cs
-│   └── DomainErrorHandler.cs  # IExceptionHandler → ProblemDetails
-├── Errors/
-│   └── ErrorTypes.cs           # AppException, NotFoundError, AuthError, ...
-├── Models/
-│   └── UserDto.cs
-├── Errors/
-│   └── ErrorTypes.cs           # AppException hierarchy
-├── Security/
-│   └── ArgumentPasswordHasher.cs   # PBKDF2-HMAC-SHA256, constant-time
-├── Repositories/
-│   └── UserRepository.cs          # Dapper.AOT + Sqlite
-├── Services/
-│   └── UserService.cs             # LoginAsync / CreateUserAsync
-├── Endpoints/
-│   ├── UserEndpoints.cs        # MapPost/MapGet + static handlers
-│   ├── Composition.cs          # Config → delegates → bind
-│   └── AppJsonSerializerContext.cs
-├── Repositories/
-│   └── UserRepository.cs          # Dapper.AOT + Microsoft.Data.Sqlite
-├── Services/
-│   └── UserService.cs           # LoginAsync / CreateUserAsync
-├── Domain/
-│   ├── Result.cs
-│   ├── ResultCollection.cs
-│   ├── DomainErrorHandler.cs
-│   └── ErrorTypes.cs
-├── Errors/
-│   └── ErrorTypes.cs
-├── Models/
-│   └── UserDto.cs
-├── Contracts/
-│   ├── Commands.cs
-│   └── JwtConfig.cs
-├── Security/
-│   └── ArgumentPasswordHasher.cs
-├── Repositories/
-│   └── UserRepository.cs
-├── Services/
-│   └── UserService.cs
-├── Endpoints/
-│   ├── UserEndpoints.cs
-│   ├── Composition.cs
-│   └── AppJsonSerializerContext.cs
-├── Domain/
-│   ├── Result.cs
-│   ├── ResultCollection.cs
-│   ├── DomainErrorHandler.cs
-│   └── ErrorTypes.cs
-├── Program.cs
-├── DapperAot.cs
-├── FunctionalWebApi.csproj
-└── appsettings.json
-```
-
----
-
-### Extending
-
-| Need | Where |
-|------|-------|
-| New resource (e.g. Orders) | `Endpoints/OrderEndpoints.cs` + `Repositories/OrderRepository.cs` |
-| New auth (refresh tokens) | Add `RefreshToken` table + `TokenService` in `Services/` |
-| OpenAPI / Swagger | Re-add `Swashbuckle.AspNetCore` + `AddSwaggerGen()` (not AOT-friendly, keep for dev) |
-| Rate limiting / brute-force | `UseRateLimiter` + `Microsoft.AspNetCore.RateLimiting` in `Program.cs` |
-| Email verification / password reset | New `TokenService` + email sender abstraction |
-
----
-
-### License
-
-MIT — see `LICENSE`.
+MIT

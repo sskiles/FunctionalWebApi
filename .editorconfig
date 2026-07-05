@@ -95,6 +95,9 @@ dotnet_diagnostic.IL3053.severity = none
 # FunctionalWebApi.csproj. Tamper the rationale comment there if you
 # change your mind.
 
+# Namespace declarations — project uses file-scoped; suppress IDE0160 suggestion
+csharp_style_namespace_declarations = file_scoped:silent
+
 # ── Analyzer categories (defaults restated for visibility) ─────────
 dotnet_analyzer_diagnostic.category-Style.severity       = suggestion
 dotnet_analyzer_diagnostic.category-Performance.severity  = suggestion
@@ -105,8 +108,6 @@ dotnet_analyzer_diagnostic.category-CodeQuality.severity  = suggestion
 # SA1313: Parameter names should begin with lower-case letter
 dotnet_diagnostic.SA1313.severity = silent
 
-# IDE0160: Convert to block scoped namespace
-dotnet_diagnostic.IDE0160.severity = silent
 
 # SA1633: File should have header
 dotnet_diagnostic.SA1633.severity = silent
