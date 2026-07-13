@@ -1,6 +1,15 @@
-namespace ResultType;
+namespace FunctionalWebApi.Domain;
 
+using FunctionalWebApi.Errors;
+
+/// <summary>
+/// Discriminated result for operations that yield multiple values.
+/// On success <see cref="Items"/> carries a materialized <see cref="IReadOnlyList{T}"/>.
+/// On failure <see cref="Error"/> carries an <see cref="AppException"/>-derived
+/// value describing what went wrong.
+/// </summary>
 public readonly record struct ResultCollection<TValue, TError>
+    where TError : AppException
 {
     public IReadOnlyList<TValue>? Items { get; }
     public TError? Error { get; }

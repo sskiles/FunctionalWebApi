@@ -1,25 +1,39 @@
 namespace FunctionalWebApi.Repositories;
 
+using System.Data;
 using Dapper;
-using Microsoft.Data.Sqlite;
+using FunctionalWebApi.Domain;
 using FunctionalWebApi.Errors;
 using FunctionalWebApi.Models;
 using FunctionalWebApi.Security;
 
+/// <summary>
+/// Data access for user accounts. All known domain failure modes —
+/// validation, not‑found, authentication, persistence failures — are
+/// returned as <see cref="Result{TValue, TError}"/> values. Unknown
+/// exceptions caught inside catch blocks are wrapped as
+/// <see cref="SqlError"/> of <see cref="SqlError.Kind.Unknown"/>.
+/// Truly unexpected exceptions (e.g. <c>ArgumentException</c> from a
+/// service earlier in the chain) are allowed to propagate.
+///
+/// Each method takes an already‑open <see cref="IDbConnection"/>; the caller
+/// owns the connection's lifetime. Repository methods do not open or dispose.
+/// </summary>
 public static class UserRepository
 {
     /// <summary>
-    /// Inserts a new user, hashing <paramref name="passwordChars"/> via the
-    /// global password policy. Throws <see cref="ValidationError"/> if validation
-    /// fails or <see cref="SqlError"/> on a unique‑constraint violation.
+    /// Validates the input, persists a new user, and returns the inserted row.
+    /// Validation problems surface as <see cref="ValidationError"/>; any
+    /// persistence failure (driver, network, constraint) is wrapped as
+    /// <see cref="SqlError"/>.
     /// </summary>
-    public static async Task<UserDto> CreateAsync(
-        string connectionString,
+    public static async Task<Result<UserDto, AppException>> CreateAsync(
+        IDbConnection connection,
         string name,
         string email,
         char[] passwordChars)
     {
-        ArgumentNullException.ThrowIfNull(connectionString);
+        ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(email);
         ArgumentNullException.ThrowIfNull(passwordChars);
@@ -29,99 +43,124 @@ public static class UserRepository
 
         if (trimmedName.Length == 0)
         {
-            throw new ValidationError(
-                new Dictionary<string, string[]>
-                {
-                    ["name"] = ["Name cannot be empty."],
-                });
+            return new ValidationError(new Dictionary<string, string[]>
+            {
+                ["name"] = ["Name cannot be empty."],
+            });
         }
 
         if (trimmedEmail.Length < 5 || !trimmedEmail.Contains('@') || !trimmedEmail.Contains('.'))
         {
-            throw new ValidationError(
-                new Dictionary<string, string[]>
-                {
-                    ["email"] = ["Email format invalid."],
-                });
+            return new ValidationError(new Dictionary<string, string[]>
+            {
+                ["email"] = ["Email format invalid."],
+            });
         }
 
-        // Hash the password and immediately clear the plaintext buffer.
         var storedHash = ArgumentPasswordHasher.Hash(passwordChars);
-
-        // `Hash` clears the buffer as part of its contract; just being defensive.
         Array.Clear(passwordChars, 0, passwordChars.Length);
-
-        await using var conn = new SqliteConnection(connectionString);
-        await conn.OpenAsync();
 
         try
         {
-            var id = await conn.ExecuteScalarAsync<int>(
+            var id = await connection.ExecuteScalarAsync<int>(
                 @"INSERT INTO Users (Name, Email, PasswordHash) VALUES (@name, @email, @hash); SELECT last_insert_rowid();",
                 new { name = trimmedName, email = trimmedEmail, hash = storedHash });
             return new UserDto(id, trimmedName, trimmedEmail);
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        catch (Exception ex)
         {
-            throw new SqlError(SqlError.Kind.ConstraintViolation, ex.Message);
+            // Catches driver errors, network errors, or anything else. Don't
+            // attempt to narrow to a vendor‑specific exception type — the
+            // failure mode is opaque to this layer by design.
+            return new SqlError(SqlError.Kind.Unknown, ex.Message);
         }
     }
 
     /// <summary>
-    /// Loads a user by id. Throws <see cref="NotFoundError"/> on miss.
+    /// Loads a user by id. Returns <see cref="NotFoundError"/> if no row matches.
     /// </summary>
-    public static async Task<UserDto> GetByIdAsync(string connectionString, int id)
+    public static async Task<Result<UserDto, NotFoundError>> GetByIdAsync(
+        IDbConnection connection, int id)
     {
-        await using var conn = new SqliteConnection(connectionString);
-        await conn.OpenAsync();
+        ArgumentNullException.ThrowIfNull(connection);
 
-        var user = await conn.QueryFirstOrDefaultAsync<UserDto>(
+        var user = await connection.QueryFirstOrDefaultAsync<UserDto>(
             "SELECT Id, Name, Email, PasswordHash FROM Users WHERE Id = @id",
             new { id });
 
-        return user ?? throw new NotFoundError($"User {id} not found");
+        return user is null
+            ? new NotFoundError($"User {id} not found")
+            : user;
     }
 
     /// <summary>
     /// Constant‑time authenticator: returns the user only when the supplied
-    /// password matches the row's stored hash. Every code path performs the
-    /// same amount of PBKDF2 work, so the duration does not reveal whether the
-    /// user exists.
+    /// password matches the row's stored hash, and surfaces an
+    /// <see cref="AuthError"/> for either a missing user or a wrong password
+    /// so callers cannot enumerate accounts through the response code.
+    /// Every code path performs the same amount of PBKDF2 work, so the
+    /// duration does not reveal whether the user exists.
     /// </summary>
-    public static async Task<UserDto?> TryAuthenticateAsync(
-        string connectionString, string email, char[] passwordChars)
+    public static async Task<Result<UserDto, AuthError>> TryAuthenticateAsync(
+        IDbConnection connection, string email, char[] passwordChars)
     {
-        ArgumentNullException.ThrowIfNull(connectionString);
+        ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(email);
         ArgumentNullException.ThrowIfNull(passwordChars);
 
-        await using var conn = new SqliteConnection(connectionString);
-        await conn.OpenAsync();
-
-        var row = await conn.QueryFirstOrDefaultAsync<UserDto>(
+        var row = await connection.QueryFirstOrDefaultAsync<UserDto>(
             "SELECT Id, Name, Email, PasswordHash FROM Users WHERE Email = @email",
             new { email = email.Trim().ToLowerInvariant() });
 
-        // Hand off to the same hasher that stored the value. The
-        // plaintext‑to‑array buffer is consumed deterministically.
         var verified = ArgumentPasswordHasher.Verify(
             passwordChars,
             row?.PasswordHash ?? string.Empty);
 
-        return verified ? row : null;
+        return verified && row is not null
+            ? row
+            : new AuthError("Invalid credentials");
     }
 
     /// <summary>
-    /// Returns every user, possibly empty.
+    /// Returns every user, possibly empty. DB failures surface as
+    /// <see cref="SqlError"/>.
     /// </summary>
-    public static async Task<IReadOnlyList<UserDto>> ListAsync(string connectionString)
+    public static async Task<ResultCollection<UserDto, SqlError>> ListAsync(
+        IDbConnection connection)
     {
-        await using var conn = new SqliteConnection(connectionString);
-        await conn.OpenAsync();
+        ArgumentNullException.ThrowIfNull(connection);
 
-        var users = await conn.QueryAsync<UserDto>(
-            "SELECT Id, Name, Email, PasswordHash FROM Users");
+        try
+        {
+            var users = (await connection.QueryAsync<UserDto>(
+                "SELECT Id, Name, Email, PasswordHash FROM Users")).ToList();
+            return users;
+        }
+        catch (Exception ex)
+        {
+            // Catches driver errors, network errors, or anything else. Don't
+            // attempt to narrow to a vendor‑specific exception type — the
+            // failure mode is opaque to this layer by design.
+            return new SqlError(SqlError.Kind.Unknown, ex.Message);
+        }
+    }
 
-        return users.ToList();
+    /// <summary>
+    /// Updates the password hash. Returns the number of rows affected (0
+    /// indicates <see cref="NotFoundError"/>).
+    /// </summary>
+    public static async Task<Result<int, NotFoundError>> UpdatePasswordAsync(
+        IDbConnection connection, int userId, string newHash)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(newHash);
+
+        var affected = await connection.ExecuteAsync(
+            "UPDATE Users SET PasswordHash = @hash WHERE Id = @id",
+            new { hash = newHash, id = userId });
+
+        return affected == 0
+            ? new NotFoundError($"User {userId}")
+            : affected;
     }
 }

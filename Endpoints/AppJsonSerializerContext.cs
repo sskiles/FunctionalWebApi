@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Mvc;
 [JsonSerializable(typeof(ValidationProblemDetails))]
 [JsonSerializable(typeof(Contracts.LoginCmd))]
 [JsonSerializable(typeof(Contracts.CreateUserCmd))]
+[JsonSerializable(typeof(Contracts.ChangePasswordCmd))]
 internal sealed partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }

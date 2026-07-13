@@ -14,3 +14,8 @@ public record LoginCmd(string Username, string Password);
 /// Token returned after a successful login.
 /// </summary>
 public record AuthToken(string Token);
+
+/// <summary>
+/// Command used to change a user's password.
+/// </summary>
+public record ChangePasswordCmd(string CurrentPassword, string NewPassword, string ConfirmNewPassword);

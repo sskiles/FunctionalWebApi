@@ -1,33 +1,31 @@
 namespace FunctionalWebApi.Endpoints;
 
+using System.Data;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using FunctionalWebApi.Contracts;
+using FunctionalWebApi.Domain;
+using FunctionalWebApi.Models;
 using FunctionalWebApi.Repositories;
+using FunctionalWebApi.Errors;
 
 /// <summary>
-/// Composition root: reads configuration, wires the user endpoints' data and
-/// service delegates, and registers their routes on the supplied
-/// <see cref="WebApplication"/>.
+/// Composition root: reads configuration, builds the connection-opening
+/// factory and the login delegate, and binds them into
+/// <see cref="UserEndpoints"/> so handlers can call the data and service
+/// layers without re‑reading configuration at request time.
 /// </summary>
 public static class Composition
 {
     /// <summary>
-    /// Gets cached SQLite connection string, exposed so the endpoint module can
-    /// pass it to the data layer. <see langword="internal"/> because callers
-    /// outside the assembly don't need it.
-    /// </summary>
-    internal static string ConnectionString { get; private set; } = string.Empty;
-
-    /// <summary>
-    /// Reads configuration, builds the login delegate and binds it into
-    /// <see cref="UserEndpoints"/> so its handlers can issue calls without
-    /// re‑reading the configuration on every request.
+    /// Reads configuration, builds the connection opener and the login
+    /// delegate, binds them into <see cref="UserEndpoints"/>, and registers
+    /// the user routes on the supplied <see cref="WebApplication"/>.
     /// </summary>
     public static IApplicationBuilder RegisterAllEndpoints(
         this WebApplication app, IConfiguration configuration)
     {
-        ConnectionString = configuration.GetConnectionString("Sqlite")!;
+        var connectionString = configuration.GetConnectionString("Sqlite")!;
 
         var jwtSection = configuration.GetSection("Jwt");
         var jwt = new JwtConfig(
@@ -36,17 +34,26 @@ public static class Composition
             Audience: jwtSection["Audience"]!,
             ExpiresMinutes: int.Parse(jwtSection["ExpiresMinutes"]!));
 
-        // Bind the login delegate plus connection string + JWT into the user
-        // endpoint module.  The endpoints get bound before routes are mapped,
-        // so handlers see the configuration when they execute.
-        UserEndpoints.Bind(
-            authenticate: (email, passwordChars) => UserRepository.TryAuthenticateAsync(
-                ConnectionString,
-                email,
-                passwordChars),
-            connectionString: ConnectionString,
-            jwt: jwt);
+        // Connection opener: each request gets its own IDbConnection; the
+        // ADO.NET pool recycles the underlying handle so this is cheap.
+        Func<Task<IDbConnection>> openConnection =
+            () => SqliteConnectionFactory.OpenAsync(connectionString);
+
+        // Login delegate: opens its own connection and runs the constant‑time
+        // authenticator. The service layer calls this through an opaque
+        // Func<,> signature and never sees the connection.
+        Func<string, char[], Task<Result<UserDto, AuthError>>> authenticate =
+            (email, passwordChars) => OpenAuthenticate(openConnection, email, passwordChars);
+
+        UserEndpoints.Bind(openConnection, authenticate, jwt);
 
         return app.MapUserEndpoints();
+    }
+
+    private static async Task<Result<UserDto, AuthError>> OpenAuthenticate(
+        Func<Task<IDbConnection>> openConnection, string email, char[] passwordChars)
+    {
+        using var conn = await openConnection();
+        return await UserRepository.TryAuthenticateAsync(conn, email, passwordChars);
     }
 }

@@ -1,12 +1,15 @@
-namespace ResultType;
+namespace FunctionalWebApi.Domain;
+
+using FunctionalWebApi.Errors;
 
 /// <summary>
 /// Discriminated result of an operation.
 /// On success <see cref="Value"/> is the desired result.
-/// On failure <see cref="Error"/> carries an <see cref="Exception"/>-derived
+/// On failure <see cref="Error"/> carries an <see cref="AppException"/>-derived
 /// value describing what went wrong (validation, not‑found, auth, etc.).
 /// </summary>
 public readonly record struct Result<TValue, TError>
+    where TError : AppException
 {
     public TValue? Value { get; }
     public TError? Error { get; }
