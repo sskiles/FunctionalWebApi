@@ -17,12 +17,11 @@ using FunctionalWebApi.Models;
 /// <see cref="Exception"/> value. Unknown exceptions caught inside catch
 /// blocks are wrapped as a plain <see cref="Exception"/>.
 ///
-/// Each method takes a <see cref="IDbConnection"/> owned by the caller.
-/// Connection state is left to Dapper: if the supplied connection hasn't
-/// been opened yet, Dapper opens lazily on first query. The repository
-/// neither opens nor disposes. Password hashing is inlined as a single
-/// PBKDF2 step. There is no
-/// dedicated hasher class.
+/// Each method takes a <see cref="Func{IDbConnection}"/> from composition.
+/// Inside the method the connection is constructed (closed), opened lazily
+/// by Dapper on first query, and disposed at method exit. The driver type
+/// stays invisible to callers — they hand over a delegate without knowing
+/// what database engine is behind it.
 /// </summary>
 public static class UserRepository
 {
@@ -38,12 +37,12 @@ public static class UserRepository
     /// plain <see cref="Exception"/>.
     /// </summary>
     public static async Task<Result<UserDto, Exception>> CreateAsync(
-        IDbConnection connection,
+        Func<IDbConnection> newConnection,
         string name,
         string email,
         string password)
     {
-        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(newConnection);
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(email);
 
@@ -62,9 +61,10 @@ public static class UserRepository
 
         var storedHash = HashPassword(password);
 
+        using var conn = newConnection();
         try
         {
-            var id = await connection.ExecuteScalarAsync<int>(
+            var id = await conn.ExecuteScalarAsync<int>(
                 @"INSERT INTO Users (Name, Email, PasswordHash) VALUES (@name, @email, @hash); SELECT last_insert_rowid();",
                 new { name = trimmedName, email = trimmedEmail, hash = storedHash });
             return new UserDto(id, trimmedName, trimmedEmail);
@@ -81,11 +81,12 @@ public static class UserRepository
     /// row matches.
     /// </summary>
     public static async Task<Result<UserDto, Exception>> GetByIdAsync(
-        IDbConnection connection, int id)
+        Func<IDbConnection> newConnection, int id)
     {
-        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(newConnection);
 
-        var user = await connection.QueryFirstOrDefaultAsync<UserDto>(
+        using var conn = newConnection();
+        var user = await conn.QueryFirstOrDefaultAsync<UserDto>(
             "SELECT Id, Name, Email, PasswordHash FROM Users WHERE Id = @id",
             new { id });
 
@@ -99,17 +100,17 @@ public static class UserRepository
     /// password matches the row's stored hash, and surfaces an
     /// <see cref="UnauthorizedAccessException"/> for either a missing user
     /// or a wrong password so callers cannot enumerate accounts through the
-    /// response code. Every code path performs the same amount of PBKDF2
-    /// work, so the duration does not reveal whether the user exists.
+    /// response code.
     /// </summary>
     public static async Task<Result<UserDto, Exception>> TryAuthenticateAsync(
-        IDbConnection connection, string email, char[] passwordChars)
+        Func<IDbConnection> newConnection, string email, char[] passwordChars)
     {
-        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(newConnection);
         ArgumentNullException.ThrowIfNull(email);
         ArgumentNullException.ThrowIfNull(passwordChars);
 
-        var row = await connection.QueryFirstOrDefaultAsync<UserDto>(
+        using var conn = newConnection();
+        var row = await conn.QueryFirstOrDefaultAsync<UserDto>(
             "SELECT Id, Name, Email, PasswordHash FROM Users WHERE Email = @email",
             new { email = email.Trim().ToLowerInvariant() });
 
@@ -125,13 +126,14 @@ public static class UserRepository
     /// <see cref="Exception"/>.
     /// </summary>
     public static async Task<ResultCollection<UserDto, Exception>> ListAsync(
-        IDbConnection connection)
+        Func<IDbConnection> newConnection)
     {
-        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(newConnection);
 
         try
         {
-            var users = (await connection.QueryAsync<UserDto>(
+            using var conn = newConnection();
+            var users = (await conn.QueryAsync<UserDto>(
                 "SELECT Id, Name, Email, PasswordHash FROM Users")).ToList();
             return users;
         }
@@ -146,12 +148,13 @@ public static class UserRepository
     /// indicates <see cref="KeyNotFoundException"/>).
     /// </summary>
     public static async Task<Result<int, Exception>> UpdatePasswordAsync(
-        IDbConnection connection, int userId, string newHash)
+        Func<IDbConnection> newConnection, int userId, string newHash)
     {
-        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(newConnection);
         ArgumentNullException.ThrowIfNull(newHash);
 
-        var affected = await connection.ExecuteAsync(
+        using var conn = newConnection();
+        var affected = await conn.ExecuteAsync(
             "UPDATE Users SET PasswordHash = @hash WHERE Id = @id",
             new { hash = newHash, id = userId });
 
@@ -168,4 +171,3 @@ public static class UserRepository
         return Convert.ToHexString(hashBytes);
     }
 }
-#pragma warning restore CA1825

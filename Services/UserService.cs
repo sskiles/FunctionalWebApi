@@ -98,11 +98,11 @@ public static class UserService
     /// plain <see cref="Exception"/> for storage failures.
     /// </summary>
     public static async Task<Result<UserDto, Exception>> CreateUserAsync(
-        IDbConnection connection,
+        Func<IDbConnection> newConnection,
         CreateUserCmd cmd,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(newConnection);
         ArgumentNullException.ThrowIfNull(cmd);
 
         if (!string.Equals(cmd.Password, cmd.ConfirmPassword, StringComparison.Ordinal))
@@ -113,7 +113,7 @@ public static class UserService
         var passwordChars = cmd.Password.ToCharArray();
         try
         {
-            return await UserRepository.CreateAsync(connection, cmd.Name, cmd.Email, passwordChars);
+            return await UserRepository.CreateAsync(newConnection, cmd.Name, cmd.Email, passwordChars);
         }
         finally
         {
@@ -130,14 +130,14 @@ public static class UserService
     /// <see cref="ArgumentException"/>.
     /// </summary>
     public static async Task<Result<UserDto, Exception>> ChangePasswordAsync(
-        IDbConnection connection,
+        Func<IDbConnection> newConnection,
         int userId,
         ChangePasswordCmd cmd)
     {
-        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(newConnection);
         ArgumentNullException.ThrowIfNull(cmd);
 
-        var loaded = await UserRepository.GetByIdAsync(connection, userId);
+        var loaded = await UserRepository.GetByIdAsync(newConnection, userId);
         if (loaded.IsFailure)
         {
             return loaded.Error!;
@@ -168,13 +168,13 @@ public static class UserService
         try
         {
             var newHash = HashPassword(newPasswordChars);
-            var update = await UserRepository.UpdatePasswordAsync(connection, userId, newHash);
+            var update = await UserRepository.UpdatePasswordAsync(newConnection, userId, newHash);
             if (update.IsFailure)
             {
                 return update.Error!;
             }
 
-            var refreshed = await UserRepository.GetByIdAsync(connection, userId);
+            var refreshed = await UserRepository.GetByIdAsync(newConnection, userId);
             return refreshed.IsFailure
                 ? refreshed.Error!
                 : refreshed.Value!;

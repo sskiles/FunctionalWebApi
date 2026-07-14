@@ -15,11 +15,12 @@ using Microsoft.Data.Sqlite;
 /// delegates (connection construction + service/repository dispatch + JWT
 /// issuance where relevant), and binds them into <see cref="UserEndpoints"/>.
 ///
-/// Connections handed to <see cref="UserRepository"/> and
-/// <see cref="UserService"/> are constructed <em>closed</em>. Dapper opens
-/// lazily on first query and ASP.NET Core's connection pooling handles the
-/// rest; no explicit <c>OpenAsync</c> call lives in this layer or in the
-/// repositories.
+/// A single <c>newConnection</c> delegate is constructed here and threaded
+/// down to every per-route pipeline. The delegate returns a fresh,
+/// <em>closed</em> <see cref="SqliteConnection"/>; the consumer opens it
+/// (Dapper checks <c>WasClosed</c> on first query) and disposes it on
+/// method exit. Mirrors the shape of <see cref="JwtConfig"/>: a small piece
+/// of built-once data handed to lower layers that consume it.
 /// </summary>
 public static class Composition
 {
@@ -40,49 +41,30 @@ public static class Composition
             Audience: jwtSection["Audience"]!,
             ExpiresMinutes: int.Parse(jwtSection["ExpiresMinutes"]!));
 
+        // One dataset for the lifetime of the app: a closed
+        // SqliteConnection per request, opened lazily by Dapper. The driver
+        // type leaks no further than this closure body.
+        Func<IDbConnection> newConnection = () => new SqliteConnection(connectionString);
+
         // -- per-route pipeline delegates -----------------------------------
-        // Each closure owns its connection's lifetime via `await using`. The
-        // SqliteConnection is handed to the repository closed; Dapper
-        // auto-opens on first use. Disposal returns the connection to the
-        // Microsoft.Data.Sqlite pool.
 
         Func<LoginCmd, Task<Result<AuthToken, Exception>>> loginHandler =
             async cmd => await UserService.LoginAsync(
-                async (email, chars) =>
-                {
-                    await using var conn = new SqliteConnection(connectionString);
-                    return await UserRepository.TryAuthenticateAsync(conn, email, chars);
-                },
+                (email, chars) => UserRepository.TryAuthenticateAsync(newConnection, email, chars),
                 jwt,
                 cmd);
 
         Func<CreateUserCmd, Task<Result<UserDto, Exception>>> createUserHandler =
-            async cmd =>
-            {
-                await using var conn = new SqliteConnection(connectionString);
-                return await UserService.CreateUserAsync(conn, cmd);
-            };
+            async cmd => await UserService.CreateUserAsync(newConnection, cmd);
 
         Func<int, Task<Result<UserDto, Exception>>> getByIdHandler =
-            async id =>
-            {
-                await using var conn = new SqliteConnection(connectionString);
-                return await UserRepository.GetByIdAsync(conn, id);
-            };
+            async id => await UserRepository.GetByIdAsync(newConnection, id);
 
         Func<Task<ResultCollection<UserDto, Exception>>> listHandler =
-            async () =>
-            {
-                await using var conn = new SqliteConnection(connectionString);
-                return await UserRepository.ListAsync(conn);
-            };
+            async () => await UserRepository.ListAsync(newConnection);
 
         Func<(int Id, ChangePasswordCmd Cmd), Task<Result<UserDto, Exception>>> changePasswordHandler =
-            async t =>
-            {
-                await using var conn = new SqliteConnection(connectionString);
-                return await UserService.ChangePasswordAsync(conn, t.Id, t.Cmd);
-            };
+            async t => await UserService.ChangePasswordAsync(newConnection, t.Id, t.Cmd);
 
         UserEndpoints.Bind(
             loginHandler: loginHandler,
