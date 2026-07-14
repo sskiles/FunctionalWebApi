@@ -1,12 +1,8 @@
 namespace FunctionalWebApi.Endpoints;
 
-using System.Data;
 using FunctionalWebApi.Contracts;
 using FunctionalWebApi.Domain;
-using FunctionalWebApi.Errors;
 using FunctionalWebApi.Models;
-using FunctionalWebApi.Repositories;
-using FunctionalWebApi.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 
@@ -17,49 +13,53 @@ using Microsoft.AspNetCore.Http;
 ///
 /// Handlers convert <see cref="Result{TValue, TError}"/> into HTTP responses:
 /// on success the value is wrapped in <see cref="Results.Ok(object?)"/>; on
-/// failure the carried <see cref="AppException"/> is thrown so the global
-/// <see cref="FunctionalWebApi.Domain.DomainErrorHandler"/> can translate it.
+/// failure the carried <see cref="Exception"/> is thrown so the global
+/// <see cref="FunctionalWebApi.Domain.DomainErrorHandler"/> can translate it
+/// to the appropriate HTTP status (401/404/400 etc.).
 ///
-/// Each handler opens an <see cref="IDbConnection"/> for the request via
-/// <see cref="OpenConnection"/> (configured at startup by
-/// <see cref="Composition.RegisterAllEndpoints"/>) and disposes it before
-/// returning. <see cref="ArgumentNullException.ThrowIfNull"/> style guards
-/// ensure a misconfigured binding surfaces immediately.
+/// Handler bodies are deliberately thin: each one invokes a single
+/// per-operation pipeline delegate injected by
+/// <see cref="Composition.RegisterAllEndpoints"/>, then unwraps the result.
+/// All connection handling and orchestration lives in <see cref="Composition"/>.
 /// </summary>
 public static class UserEndpoints
 {
-    // Cached delegates — Composition calls <see cref="Bind"/> once at startup
-    // so request handlers don't have to re‑build connection strings on every call.
-    private static Func<Task<IDbConnection>> OpenConnection = null!;
-    private static Func<string, char[], Task<Result<UserDto, AuthError>>> Authenticate = null!;
-    private static JwtConfig Jwt = null!;
+    // Pipeline delegates injected by Composition at startup. Each one is the
+    // entire body for one route (connection open + service/repo call +
+    // JWT issuance where relevant). Handler bodies simply invoke and unwrap.
+    private static Func<LoginCmd, Task<Result<AuthToken, Exception>>> LoginHandler = null!;
+    private static Func<CreateUserCmd, Task<Result<UserDto, Exception>>> CreateUserHandler = null!;
+    private static Func<int, Task<Result<UserDto, Exception>>> GetByIdHandler = null!;
+    private static Func<Task<ResultCollection<UserDto, Exception>>> ListHandler = null!;
+    private static Func<(int Id, ChangePasswordCmd Cmd), Task<Result<UserDto, Exception>>> ChangePasswordHandler = null!;
 
     /// <summary>
-    /// Called by <see cref="Composition.RegisterAllEndpoints"/> at startup.
-    /// Stores the connection opener, the login delegate, and the JWT config
-    /// so each request handler can issue calls into the data and service
-    /// layers without re‑reading configuration.
+    /// Binds the per-operation pipeline delegates built by
+    /// <see cref="Composition.RegisterAllEndpoints"/>.
     /// </summary>
     public static void Bind(
-        Func<Task<IDbConnection>> openConnection,
-        Func<string, char[], Task<Result<UserDto, AuthError>>> authenticate,
-        JwtConfig jwt)
+        Func<LoginCmd, Task<Result<AuthToken, Exception>>> loginHandler,
+        Func<CreateUserCmd, Task<Result<UserDto, Exception>>> createUserHandler,
+        Func<int, Task<Result<UserDto, Exception>>> getByIdHandler,
+        Func<Task<ResultCollection<UserDto, Exception>>> listHandler,
+        Func<(int Id, ChangePasswordCmd Cmd), Task<Result<UserDto, Exception>>> changePasswordHandler)
     {
-        OpenConnection = openConnection;
-        Authenticate = authenticate;
-        Jwt = jwt;
+        LoginHandler = loginHandler;
+        CreateUserHandler = createUserHandler;
+        GetByIdHandler = getByIdHandler;
+        ListHandler = listHandler;
+        ChangePasswordHandler = changePasswordHandler;
     }
 
     /// <summary>
     /// Maps the user endpoints onto the supplied <see cref="WebApplication"/>.
+    /// Method-group references are passed to <c>MapPost</c>/<c>MapGet</c> so
+    /// the minimal-API request delegate generator can statically see each
+    /// handler symbol; lambdas at this layer would force the runtime factory
+    /// to fall back to reflection-based dispatch under native AOT.
     /// </summary>
     public static IApplicationBuilder MapUserEndpoints(this WebApplication app)
     {
-        // Method-group references are passed to MapPost/MapGet so the minimal-API
-        // request delegate generator (RDG) can statically see the handler symbol.
-        // Routing a lambda declared inline, or assigning the function to an
-        // intermediate local, would force the runtime RequestDelegateFactory to
-        // fall back to reflection-based handling under native AOT.
         _ = app.MapPost("/login", Login)
            .Produces<AuthToken>()
            .Produces(StatusCodes.Status401Unauthorized)
@@ -67,7 +67,6 @@ public static class UserEndpoints
 
         _ = app.MapPost("/users", Create)
            .Produces<UserDto>()
-           .Produces(StatusCodes.Status409Conflict)
            .Produces(StatusCodes.Status400BadRequest)
            .WithName("CreateUser");
 
@@ -90,57 +89,45 @@ public static class UserEndpoints
         return app;
     }
 
-    // --- handlers ---------------------------------------------------------
-    // Each handler opens a connection for the lifetime of the request,
-    // disposes it on exit, and unwraps the Result. On failure the inner
-    // AppException is thrown so DomainErrorHandler can map it to a status.
+    // --- handler bodies ---------------------------------------------------
+    // Each handler is one invocation of an injected delegate, then Unwrap.
 
     private static async Task<IResult> Login(LoginCmd cmd)
-    {
-        var result = await UserService.LoginAsync(Authenticate, Jwt, cmd);
-        return Unwrap(result);
-    }
+        => Unwrap(await LoginHandler(cmd));
 
     private static async Task<IResult> Create(CreateUserCmd cmd)
-    {
-        using var conn = await OpenConnection();
-        var result = await UserService.CreateUserAsync(conn, cmd);
-        return Unwrap(result);
-    }
+        => Unwrap(await CreateUserHandler(cmd));
 
     private static async Task<IResult> GetById(int id)
-    {
-        using var conn = await OpenConnection();
-        var result = await UserRepository.GetByIdAsync(conn, id);
-        return Unwrap(result);
-    }
+        => Unwrap(await GetByIdHandler(id));
 
     private static async Task<IResult> List()
-    {
-        using var conn = await OpenConnection();
-        var result = await UserRepository.ListAsync(conn);
-        if (result.IsFailure)
-        {
-            throw result.Error!;
-        }
-        return Results.Ok(result.Items);
-    }
+        => Unwrap(await ListHandler());
 
     private static async Task<IResult> ChangePassword(int id, ChangePasswordCmd cmd)
-    {
-        using var conn = await OpenConnection();
-        var result = await UserService.ChangePasswordAsync(conn, id, cmd);
-        return Unwrap(result);
-    }
+        => Unwrap(await ChangePasswordHandler((id, cmd)));
 
     // --- Unwrap helpers ---------------------------------------------------
+    // On failure the carried Exception is thrown so DomainErrorHandler can
+    // map it to the right HTTP status (UnauthorizedAccessException → 401,
+    // KeyNotFoundException → 404, ArgumentException → 400, etc.).
     private static IResult Unwrap<TValue, TError>(Result<TValue, TError> result)
-        where TError : AppException
+        where TError : Exception
     {
         if (result.IsFailure)
         {
             throw result.Error!;
         }
         return Results.Ok(result.Value);
+    }
+
+    private static IResult Unwrap<TValue, TError>(ResultCollection<TValue, TError> result)
+        where TError : Exception
+    {
+        if (result.IsFailure)
+        {
+            throw result.Error!;
+        }
+        return Results.Ok(result.Items);
     }
 }

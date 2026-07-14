@@ -2,42 +2,43 @@ namespace FunctionalWebApi.Services;
 
 using System.Data;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using FunctionalWebApi.Contracts;
 using FunctionalWebApi.Domain;
-using FunctionalWebApi.Errors;
 using FunctionalWebApi.Endpoints;
 using FunctionalWebApi.Models;
 using FunctionalWebApi.Repositories;
-using FunctionalWebApi.Security;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using JwtReg = Microsoft.IdentityModel.JsonWebTokens.JwtRegisteredClaimNames;
 
 /// <summary>
 /// Stateless service layer for user-facing operations. Known failure modes
-/// surface as <see cref="Result{TValue, TError}"/> carrying the
-/// <see cref="AppException"/>-derived value. Unknown infrastructure failures
-/// remain as uncaught exceptions and surface as HTTP 500 downstream.
+/// surface as <see cref="Result{TValue, TError}"/> carrying a BCL
+/// <see cref="Exception"/> value. Unknown infrastructure failures remain
+/// as uncaught exceptions and surface as HTTP 500 downstream.
 ///
 /// Each method takes an already‑open <see cref="IDbConnection"/> managed by
-/// the caller. The service never owns the connection's lifetime.
+/// the caller. The service never owns the connection's lifetime. Password
+/// verification logic is inlined; there is no dedicated hasher class.
 /// </summary>
 public static class UserService
 {
     /// <summary>
     /// Verifies the credentials via the repository's constant‑time
-    /// authenticator and issues a fresh JWT on success. Any failure surfaces as
-    /// a single <see cref="AuthError"/> so callers cannot enumerate accounts.
+    /// authenticator and issues a fresh JWT on success. Any failure surfaces
+    /// as a single <see cref="UnauthorizedAccessException"/> so callers
+    /// cannot enumerate accounts.
     /// </summary>
     /// <remarks>
-    /// The <paramref name="authenticate"/> delegate is built by <see cref="Composition"/>
-    /// and is responsible for opening and disposing its own
-    /// <see cref="IDbConnection"/>. The login flow does not need a shared
-    /// connection since it performs only one DB read.
+    /// The <paramref name="authenticate"/> delegate is built by
+    /// <see cref="Composition.RegisterAllEndpoints"/> and is responsible for
+    /// opening and disposing its own <see cref="IDbConnection"/>. The login
+    /// flow performs only one DB read.
     /// </remarks>
-    public static async Task<Result<AuthToken, AuthError>> LoginAsync(
-        Func<string, char[], Task<Result<UserDto, AuthError>>> authenticate,
+    public static async Task<Result<AuthToken, Exception>> LoginAsync(
+        Func<string, char[], Task<Result<UserDto, Exception>>> authenticate,
         JwtConfig jwt,
         LoginCmd cmd)
     {
@@ -45,7 +46,7 @@ public static class UserService
         ArgumentNullException.ThrowIfNull(cmd);
 
         var passwordChars = cmd.Password.ToCharArray();
-        Result<UserDto, AuthError> authResult;
+        Result<UserDto, Exception> authResult;
         try
         {
             authResult = await authenticate(cmd.Username, passwordChars);
@@ -53,24 +54,22 @@ public static class UserService
         catch
         {
             Array.Clear(passwordChars, 0, passwordChars.Length);
-            return new AuthError("Invalid credentials");
+            return new UnauthorizedAccessException("Invalid credentials");
         }
 
         Array.Clear(passwordChars, 0, passwordChars.Length);
 
         if (authResult.IsFailure)
         {
+            // Surface whatever exception the delegate returned (typically
+            // UnauthorizedAccessException for any auth failure).
             return authResult.Error!;
         }
 
         var user = authResult.Value!;
-        var jwtKey = jwt.Key;
-        var jwtIssuer = jwt.Issuer;
-        var jwtAudience = jwt.Audience;
-        var jwtExpiresMinutes = jwt.ExpiresMinutes;
 
         var tokenHandler = new JsonWebTokenHandler();
-        var key = Encoding.UTF8.GetBytes(jwtKey);
+        var key = Encoding.UTF8.GetBytes(jwt.Key);
         var tokenDescriptor = new SecurityTokenDescriptor
         {
             Subject = new ClaimsIdentity(new[]
@@ -79,9 +78,9 @@ public static class UserService
                 new Claim(JwtReg.Jti, Guid.NewGuid().ToString()),
                 new Claim("uid",      user.Id.ToString()),
             }),
-            Expires = DateTime.UtcNow.AddMinutes(jwtExpiresMinutes),
-            Issuer = jwtIssuer,
-            Audience = jwtAudience,
+            Expires = DateTime.UtcNow.AddMinutes(jwt.ExpiresMinutes),
+            Issuer = jwt.Issuer,
+            Audience = jwt.Audience,
             SigningCredentials = new SigningCredentials(
                 new SymmetricSecurityKey(key),
                 SecurityAlgorithms.HmacSha256),
@@ -92,12 +91,13 @@ public static class UserService
 
     /// <summary>
     /// Validates the supplied <see cref="CreateUserCmd"/>, confirms that the
-    /// two password fields match (constant‑time, regardless of client
-    /// validation), and persists the user through the repository. Returns
-    /// either the new <see cref="UserDto"/>, a <see cref="ValidationError"/>
-    /// for input problems, or a <see cref="SqlError"/> if the email is taken.
+    /// two password fields match (plain server‑side comparison, regardless
+    /// of client validation), and persists the user through the repository.
+    /// Returns either the new <see cref="UserDto"/>, an
+    /// <see cref="ArgumentException"/> describing the input problem, or a
+    /// plain <see cref="Exception"/> for storage failures.
     /// </summary>
-    public static async Task<Result<UserDto, AppException>> CreateUserAsync(
+    public static async Task<Result<UserDto, Exception>> CreateUserAsync(
         IDbConnection connection,
         CreateUserCmd cmd,
         CancellationToken ct = default)
@@ -105,40 +105,31 @@ public static class UserService
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(cmd);
 
-        var password = cmd.Password.ToCharArray();
-        var confirmPassword = cmd.ConfirmPassword.ToCharArray();
+        if (!string.Equals(cmd.Password, cmd.ConfirmPassword, StringComparison.Ordinal))
+        {
+            return new ArgumentException("Password confirmation does not match.");
+        }
+
+        var passwordChars = cmd.Password.ToCharArray();
         try
         {
-            if (!ArgumentPasswordHasher.AreEqual(password, confirmPassword))
-            {
-                return new ValidationError(new Dictionary<string, string[]>
-                {
-                    ["confirmPassword"] = ["Password confirmation does not match."],
-                });
-            }
-
-            var repoResult = await UserRepository.CreateAsync(
-                connection: connection,
-                name: cmd.Name,
-                email: cmd.Email,
-                passwordChars: cmd.Password.ToCharArray());
-
-            return repoResult;
+            return await UserRepository.CreateAsync(connection, cmd.Name, cmd.Email, passwordChars);
         }
         finally
         {
-            Array.Clear(password, 0, password.Length);
-            Array.Clear(confirmPassword, 0, confirmPassword.Length);
+            // Repository also clears; defensive second wipe in case it short-circuited.
+            Array.Clear(passwordChars, 0, passwordChars.Length);
         }
     }
 
     /// <summary>
-    /// Changes a user's password after verifying the current one. Returns the
-    /// updated <see cref="UserDto"/>, or one of:
-    /// <see cref="NotFoundError"/>, <see cref="AuthError"/>,
-    /// <see cref="ValidationError"/>.
+    /// Changes a user's password after verifying the current one. Returns
+    /// the updated <see cref="UserDto"/>, or one of:
+    /// <see cref="KeyNotFoundException"/>,
+    /// <see cref="UnauthorizedAccessException"/>, or
+    /// <see cref="ArgumentException"/>.
     /// </summary>
-    public static async Task<Result<UserDto, AppException>> ChangePasswordAsync(
+    public static async Task<Result<UserDto, Exception>> ChangePasswordAsync(
         IDbConnection connection,
         int userId,
         ChangePasswordCmd cmd)
@@ -153,33 +144,30 @@ public static class UserService
         }
         var user = loaded.Value!;
 
-        var currentChars = cmd.CurrentPassword.ToCharArray();
+        // Verify the current password against the stored hash. Constant-time
+        // comparison via the same PBKDF2 path used at registration.
+        var currentPasswordChars = cmd.CurrentPassword.ToCharArray();
         try
         {
-            if (!ArgumentPasswordHasher.Verify(currentChars, user.PasswordHash ?? string.Empty))
+            if (!VerifyPassword(currentPasswordChars, user.PasswordHash ?? string.Empty))
             {
-                return new AuthError("Current password is incorrect.");
+                return new UnauthorizedAccessException("Current password is incorrect.");
             }
         }
         finally
         {
-            Array.Clear(currentChars, 0, currentChars.Length);
+            Array.Clear(currentPasswordChars, 0, currentPasswordChars.Length);
+        }
+
+        if (!string.Equals(cmd.NewPassword, cmd.ConfirmNewPassword, StringComparison.Ordinal))
+        {
+            return new ArgumentException("New password confirmation does not match.");
         }
 
         var newPasswordChars = cmd.NewPassword.ToCharArray();
-        var confirmPasswordChars = cmd.ConfirmNewPassword.ToCharArray();
         try
         {
-            if (!ArgumentPasswordHasher.AreEqual(newPasswordChars, confirmPasswordChars))
-            {
-                return new ValidationError(new Dictionary<string, string[]>
-                {
-                    ["confirmPassword"] = ["New password confirmation does not match."],
-                });
-            }
-
-            var newHash = ArgumentPasswordHasher.Hash(cmd.NewPassword.ToCharArray());
-
+            var newHash = HashPassword(newPasswordChars);
             var update = await UserRepository.UpdatePasswordAsync(connection, userId, newHash);
             if (update.IsFailure)
             {
@@ -194,7 +182,61 @@ public static class UserService
         finally
         {
             Array.Clear(newPasswordChars, 0, newPasswordChars.Length);
-            Array.Clear(confirmPasswordChars, 0, confirmPasswordChars.Length);
         }
+    }
+
+    // --- inline password helpers -----------------------------------------
+    // Same PBKDF2-HMAC-SHA256 recipe as the repository. Kept private to
+    // this service so the verification step lives next to the orchestration
+    // that calls it.
+
+    private const int Iterations = 600_000;
+    private const int SaltSize = 16;
+    private const int HashSize = 32;
+
+    private static string HashPassword(char[] passwordChars)
+    {
+        var salt = RandomNumberGenerator.GetBytes(SaltSize);
+        var hash = new Rfc2898DeriveBytes(
+            Encoding.UTF8.GetBytes(new string(passwordChars)),
+            salt,
+            Iterations,
+            HashAlgorithmName.SHA256).GetBytes(HashSize);
+        return $"{Iterations}${Convert.ToBase64String(salt)}${Convert.ToBase64String(hash)}";
+    }
+
+    private static bool VerifyPassword(char[] passwordChars, string stored)
+    {
+        try
+        {
+            var parts = stored.Split('$');
+            if (parts.Length != 3) return Burn();
+            if (!int.TryParse(parts[0], out var iterations)) return Burn();
+            var salt   = Convert.FromBase64String(parts[1]);
+            var expect = Convert.FromBase64String(parts[2]);
+            if (salt.Length != SaltSize || expect.Length != HashSize) return Burn();
+
+            var candidate = new Rfc2898DeriveBytes(
+                Encoding.UTF8.GetBytes(new string(passwordChars)),
+                salt,
+                iterations,
+                HashAlgorithmName.SHA256).GetBytes(HashSize);
+
+            return CryptographicOperations.FixedTimeEquals(expect, candidate);
+        }
+        finally
+        {
+            Array.Clear(passwordChars, 0, passwordChars.Length);
+        }
+    }
+
+    private static bool Burn()
+    {
+        _ = new Rfc2898DeriveBytes(
+            Array.Empty<byte>(),
+            new byte[SaltSize],
+            Iterations,
+            HashAlgorithmName.SHA256).GetBytes(HashSize);
+        return false;
     }
 }

@@ -7,20 +7,24 @@ using FunctionalWebApi.Contracts;
 using FunctionalWebApi.Domain;
 using FunctionalWebApi.Models;
 using FunctionalWebApi.Repositories;
-using FunctionalWebApi.Errors;
+using FunctionalWebApi.Services;
 
 /// <summary>
-/// Composition root: reads configuration, builds the connection-opening
-/// factory and the login delegate, and binds them into
-/// <see cref="UserEndpoints"/> so handlers can call the data and service
-/// layers without re‑reading configuration at request time.
+/// Composition root: reads configuration, builds the per-operation pipeline
+/// delegates (connection open + service/repository dispatch + JWT issuance
+/// where relevant), and binds them into <see cref="UserEndpoints"/>. Every
+/// delegate is parameter‑driven so the call chain — endpoint handler,
+/// service, repository — receives its dependencies through closures rather
+/// than static class references. The pipeline bodies live here; the
+/// business logic bodies live in <see cref="UserService"/> and
+/// <see cref="UserRepository"/>.
 /// </summary>
 public static class Composition
 {
     /// <summary>
-    /// Reads configuration, builds the connection opener and the login
-    /// delegate, binds them into <see cref="UserEndpoints"/>, and registers
-    /// the user routes on the supplied <see cref="WebApplication"/>.
+    /// Reads configuration, builds the connection lifecycle and per‑route
+    /// pipeline delegates, binds them into <see cref="UserEndpoints"/>, and
+    /// returns the application builder with the user routes registered.
     /// </summary>
     public static IApplicationBuilder RegisterAllEndpoints(
         this WebApplication app, IConfiguration configuration)
@@ -34,26 +38,63 @@ public static class Composition
             Audience: jwtSection["Audience"]!,
             ExpiresMinutes: int.Parse(jwtSection["ExpiresMinutes"]!));
 
-        // Connection opener: each request gets its own IDbConnection; the
-        // ADO.NET pool recycles the underlying handle so this is cheap.
+        // -- connection lifecycle -------------------------------------------
+        // A single connection opener captured by every per‑route pipeline.
         Func<Task<IDbConnection>> openConnection =
             () => SqliteConnectionFactory.OpenAsync(connectionString);
 
-        // Login delegate: opens its own connection and runs the constant‑time
-        // authenticator. The service layer calls this through an opaque
-        // Func<,> signature and never sees the connection.
-        Func<string, char[], Task<Result<UserDto, AuthError>>> authenticate =
-            (email, passwordChars) => OpenAuthenticate(openConnection, email, passwordChars);
+        // -- authenticate delegate ------------------------------------------
+        // The login pipeline doesn't open a connection at the endpoint;
+        // instead it routes through UserService.LoginAsync which delegates
+        // the credential check through this closure. The closure owns
+        // connection lifetime for the credential lookup.
+        Func<string, char[], Task<Result<UserDto, Exception>>> authenticate =
+            async (email, passwordChars) =>
+            {
+                using var conn = await openConnection();
+                return await UserRepository.TryAuthenticateAsync(conn, email, passwordChars);
+            };
 
-        UserEndpoints.Bind(openConnection, authenticate, jwt);
+        // -- per-route pipeline delegates -----------------------------------
+
+        Func<LoginCmd, Task<Result<AuthToken, Exception>>> loginHandler =
+            async cmd => await UserService.LoginAsync(authenticate, jwt, cmd);
+
+        Func<CreateUserCmd, Task<Result<UserDto, Exception>>> createUserHandler =
+            async cmd =>
+            {
+                using var conn = await openConnection();
+                return await UserService.CreateUserAsync(conn, cmd);
+            };
+
+        Func<int, Task<Result<UserDto, Exception>>> getByIdHandler =
+            async id =>
+            {
+                using var conn = await openConnection();
+                return await UserRepository.GetByIdAsync(conn, id);
+            };
+
+        Func<Task<ResultCollection<UserDto, Exception>>> listHandler =
+            async () =>
+            {
+                using var conn = await openConnection();
+                return await UserRepository.ListAsync(conn);
+            };
+
+        Func<(int Id, ChangePasswordCmd Cmd), Task<Result<UserDto, Exception>>> changePasswordHandler =
+            async t =>
+            {
+                using var conn = await openConnection();
+                return await UserService.ChangePasswordAsync(conn, t.Id, t.Cmd);
+            };
+
+        UserEndpoints.Bind(
+            loginHandler: loginHandler,
+            createUserHandler: createUserHandler,
+            getByIdHandler: getByIdHandler,
+            listHandler: listHandler,
+            changePasswordHandler: changePasswordHandler);
 
         return app.MapUserEndpoints();
-    }
-
-    private static async Task<Result<UserDto, AuthError>> OpenAuthenticate(
-        Func<Task<IDbConnection>> openConnection, string email, char[] passwordChars)
-    {
-        using var conn = await openConnection();
-        return await UserRepository.TryAuthenticateAsync(conn, email, passwordChars);
     }
 }

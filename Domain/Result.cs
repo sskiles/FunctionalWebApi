@@ -1,15 +1,16 @@
 namespace FunctionalWebApi.Domain;
 
-using FunctionalWebApi.Errors;
-
 /// <summary>
 /// Discriminated result of an operation.
 /// On success <see cref="Value"/> is the desired result.
-/// On failure <see cref="Error"/> carries an <see cref="AppException"/>-derived
-/// value describing what went wrong (validation, not‑found, auth, etc.).
+/// On failure <see cref="Error"/> carries an <see cref="Exception"/>‑derived
+/// value describing what went wrong. The concrete exception type (e.g.
+/// <see cref="KeyNotFoundException"/>, <see cref="UnauthorizedAccessException"/>,
+/// <see cref="ArgumentException"/>) lets the handler pipeline map the error
+/// to the appropriate HTTP status without inventing a parallel hierarchy.
 /// </summary>
 public readonly record struct Result<TValue, TError>
-    where TError : AppException
+    where TError : Exception
 {
     public TValue? Value { get; }
     public TError? Error { get; }
