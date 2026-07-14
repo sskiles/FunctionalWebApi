@@ -17,9 +17,11 @@ using FunctionalWebApi.Models;
 /// <see cref="Exception"/> value. Unknown exceptions caught inside catch
 /// blocks are wrapped as a plain <see cref="Exception"/>.
 ///
-/// Each method takes an already‑open <see cref="IDbConnection"/>; the caller
-/// owns the connection's lifetime. Repository methods do not open or dispose.
-/// Password hashing is inlined as a single PBKDF2 step. There is no
+/// Each method takes a <see cref="IDbConnection"/> owned by the caller.
+/// Connection state is left to Dapper: if the supplied connection hasn't
+/// been opened yet, Dapper opens lazily on first query. The repository
+/// neither opens nor disposes. Password hashing is inlined as a single
+/// PBKDF2 step. There is no
 /// dedicated hasher class.
 /// </summary>
 public static class UserRepository

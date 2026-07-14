@@ -29,9 +29,9 @@ app.UseExceptionHandler();
 // is about to validate.
 var configuration = app.Configuration;
 var connectionString = configuration.GetConnectionString("Sqlite")!;
+// Dapper auto-opens the connection on first use; we don't pre-open here.
 await using (var conn = new SqliteConnection(connectionString))
 {
-    await conn.OpenAsync();
     _ = await conn.ExecuteAsync(@"
         CREATE TABLE IF NOT EXISTS Users (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
