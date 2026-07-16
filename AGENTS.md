@@ -21,118 +21,112 @@ dotnet publish -c Release -p:PublishAot=true -p:RuntimeIdentifier=linux-x64
 
 ```
 Program.cs                                   # host entry
-  └── Endpoints/Composition.cs               # wires config → delegates
-        └── Endpoints/UserEndpoints.cs      # static method-group handlers (RDG-friendly)
-              └── Services/UserService.cs   # domain logic, throws AppException
-                    └── Repositories/UserRepository.cs  # Dapper.AOT + Sqlite
-                          └── Domain/Models + Errors    # pure data
+  └── Infrastructure/Composition.cs          # wires config → delegates
+        ├── Endpoints/UserEndpoints.cs      # static method-group handlers (RDG-friendly)
+        └── Services/UserService.cs         # validate/shape/apply rules
+              └── Repositories/UserRepository.cs  # Dapper.AOT + Sqlite
+                    └── Domain/ + Models/   # pure data / BCL exceptions
 ```
 
-**Rule**: inner layers never reference outer. Never `using` `Microsoft.AspNetCore.*`, `Dapper`, or `Microsoft.Data.Sqlite` from `Domain/`, `Models/`, or `Errors/`.
+**Rule**: inner layers never reference outer. Never `using` `Microsoft.AspNetCore.*`, `Dapper`, or `Microsoft.Data.Sqlite` from `Domain/`, `Models/`, `Contracts/`, `Services/`, or `Repositories/`.
 
 ## Folder Responsibilities
 
 | Folder | Namespace | Contents |
 |--------|-----------|----------|
-| `Contracts/` | `FunctionalWebApi.Contracts` | `LoginCmd`, `CreateUserCmd`, `AuthToken`, `JwtConfig` — DTOs only |
-| `Domain/` | `FunctionalWebApi.Domain` (global) | `Result<T,E>`, `ResultCollection<T,E>`, `AppException` hierarchy, `DomainErrorHandler` |
-| `Errors/` | `FunctionalWebApi.Errors` | `AppException` base + concrete exceptions (`NotFoundError`, `AuthError`, `ValidationError`, `SqlError`) |
+| `Contracts/` | `FunctionalWebApi.Contracts` | `LoginCmd`, `CreateUserCmd`, `AuthToken`, `ChangePasswordCmd`, `JwtConfig` — DTOs only |
+| `Domain/` | `FunctionalWebApi.Domain` (global) | `Result<T,E>`, `ResultCollection<T,E>`, `DomainErrorHandler` |
 | `Models/` | `FunctionalWebApi.Models` | `UserDto` (and future domain entities) |
-| `Security/` | `FunctionalWebApi.Security` | `ArgumentPasswordHasher` — PBKDF2-HMAC-SHA256, 600k iterations, constant-time verify |
 | `Repositories/` | `FunctionalWebApi.Repositories` | `UserRepository` — Dapper.AOT + `Microsoft.Data.Sqlite`, static methods |
-| `Services/` | `FunctionalWebApi.Services` | `UserService` — orchestrating, returns `Result<,>` or throws |
-| `Endpoints/` | `FunctionalWebApi.Endpoints` | `UserEndpoints.cs` (handlers + MapMethod), `Composition.cs` (host wiring), `AppJsonSerializerContext.cs` |
+| `Services/` | `FunctionalWebApi.Services` | `UserService` — orchestrating, returns `Result<,>` |
+| `Endpoints/` | `FunctionalWebApi.Endpoints` | `UserEndpoints.cs` (handlers + MapMethod) |
+| `Infrastructure/` | `FunctionalWebApi.Infrastructure` | `Composition.cs` (host wiring), `AppJsonSerializerContext.cs`, `SchemaBootstrap.cs` |
 
 ## Adding a New Resource (e.g. Orders)
 
-1. **Error class**: `Errors/ErrorTypes.cs` — add `DuplicateOrderError : AppException { }` if needed
-2. **Model**: `Models/OrderDto.cs` — record with `[JsonSerializable]` types if Dapper-bound
-3. **Repository**: `Repositories/OrderRepository.cs` — static methods, Dapper.AOT, throw `NotFoundError` etc, never `using Microsoft.AspNetCore.*`
-4. **Service**: `Services/OrderService.cs` — pure orchestration
-5. **Endpoints**: `Endpoints/OrderEndpoints.cs` — `MapOrderEndpoints(this WebApplication app)` extension method, **static method-group** handlers
-6. **Wire in `Composition.cs`**: `OrderEndpoints.Bind(...)` then `app.MapOrderEndpoints()`
-7. **Swagger excluded** by `NoWarn`; add types to `AppJsonSerializerContext`
+1. **Model**: `Models/OrderDto.cs` — record with `[DapperAot]` if Dapper-bound
+2. **Repository**: `Repositories/OrderRepository.cs` — static methods, Dapper.AOT, return `Result<,>` with BCL exceptions, never `using Microsoft.AspNetCore.*`
+3. **Service**: `Services/OrderService.cs` — pure orchestration, takes repo method-groups as parameters, validates/shapes/rules
+4. **Endpoints**: `Endpoints/OrderEndpoints.cs` — `MapOrderEndpoints(this WebApplication app)` extension method, **static method-group** handlers
+5. **Wire in `Composition.cs`**: build per-route delegates passing repo method-groups, then `UserEndpoints.Bind(...)` + `app.MapOrderEndpoints()`
+6. Add types to `AppJsonSerializerContext`
 
 ## Result<T,E> Pattern
 
 ```csharp
-public readonly record struct Result<TValue, TError> where TError : AppException
+public readonly record struct Result<TValue, TError>
+    where TError : Exception
 {
-    public TValue? Value { get; init; }
-    public TError? Error { get; init; }
-    public bool IsSuccess => Error is null;
-    public bool IsFailure => Error is not null;
+    public TValue? Value { get; }
+    public TError? Error { get; }
+    public bool IsSuccess { get; }
+    public bool IsFailure => !IsSuccess;
 
-    internal Result(TValue value) : this() { Value = value; Error = null; }
-    internal Result(TError error) : this() { Value = default; Error = error; }
+    internal Result(TValue value) { Value = value; Error = default; IsSuccess = true; }
+    internal Result(TError error) { Value = default; Error = error; IsSuccess = false; }
 
     public static implicit operator Result<TValue, TError>(TValue value) => new(value);
     public static implicit operator Result<TValue, TError>(TError error) => new(error);
+
+    public TResult Match<TResult>(Func<TValue, TResult> onSuccess, Func<TError, TResult> onFailure)
+        => IsSuccess ? onSuccess(Value!) : onFailure(Error!);
 }
 ```
 
-**Usage**:
+**Usage** (repo returns `Result<UserDto, Exception>`, service returns same):
 ```csharp
-public async Task<Result<UserDto, NotFoundError>> GetByIdAsync(int id, CancellationToken ct)
+public async Task<Result<UserDto, Exception>> GetByIdAsync(int id, CancellationToken ct)
 {
     var user = await _repo.FindByIdAsync(id, ct);
-    return user is not null
-        ? _mapper.Map(user)                  // implicit → Result<T,E>(TValue)
-        : new NotFoundError($"User {id}");  // implicit → Result<T,E>(TError)
+    return user is not null ? user : new KeyNotFoundException($"User {id}");
 }
 ```
 
-## Error Hierarchy — `AppException : Exception`
+## Error Handling — BCL Exception Types Only
 
-```csharp
-public abstract class AppException(string message) : Exception(message);
+No custom exception hierarchy. `DomainErrorHandler : IExceptionHandler` maps:
 
-public sealed class NotFoundError(string what)             : AppException($"{what} not found");
-public sealed class AuthError(string reason = "Invalid")   : AppException($"Auth: {reason}");
-public sealed class ValidationError(...)                   : AppException("Validation failed");
-public sealed class SqlError(string code, string message)  : AppException(message);
-```
+| Exception | HTTP Status |
+|-----------|-------------|
+| `UnauthorizedAccessException` | 401 |
+| `System.Collections.Generic.KeyNotFoundException` | 404 |
+| `ArgumentException` | 400 |
+| anything else | 500 (default ProblemDetails) |
 
-`DomainErrorHandler` maps these to HTTP status codes via `IExceptionHandler`:
-- `NotFoundError` → 404
-- `AuthError` → 401
-- `ValidationError` → 400 with `ValidationProblemDetails`
-- `SqlError(ConstraintViolation)` → 409
-- anything else → falls through to default ProblemDetails
+Endpoints throw the carried `Exception` on `Result.IsFailure`; middleware translates.
 
-## Password Hashing Pattern (`Security/ArgumentPasswordHasher`)
+## Password Handling — Temporary Plaintext
 
-- **Algorithm**: PBKDF2-HMAC-SHA256, 600 000 iterations, 16-byte salt, 32-byte hash
-- **Encoding**: `pbkdf2-sha256$600000$<base64(salt)><base64(hash)>` (PHC-style self-describing)
-- **Constant-time compare** for both login (`Verify`) and registration (`AreEqual`) — compare uses deterministic zero salt to neutralise timing diff
-- All branches call `CryptographicOperations.FixedTimeEquals` regardless of length mismatch
+**Current state (wiring pass)**: passwords stored verbatim in `PasswordHash` column. No hashing, no verification, no constant-time compare.
+
+**Next pass** (when you say the word): `UserService` owns `HashPassword(char[])` + `VerifyPassword(char[], string)` (PBKDF2-HMAC-SHA256, 600k iterations, PHC-style string); `UserRepository` receives already-hashed input and persists it.
 
 ## Endpoint Pattern — AOT/RDG-Safe
 
 ```csharp
 public static IApplicationBuilder MapUserEndpoints(this WebApplication app)
 {
-    // Pass method group directly — NEVER use lambda capture or local Func var.
+    // Pass method group directly — NEVER lambda or local Func.
     app.MapPost("/users", Create).Produces<UserDto>().WithName("CreateUser");
     app.MapGet("/users/{id:int}", GetById).Produces<UserDto>().WithName("GetUser");
     return app;
 }
 
-private static async Task<UserDto> Create(CreateUserCmd cmd, CancellationToken ct) { ... }
+private static async Task<IResult> Create(CreateUserCmd cmd)
+    => Unwrap(await CreateUserHandler(cmd));  // injected delegate
 ```
 
 **Rules**:
 - Handlers are `private static` method-group references
 - No lambda capture into `MapPost` (breaks `RequestDelegateGenerator`)
 - No local `Func<>` variable between handler and `MapPost` (also breaks source-gen)
-- Use `[FromBody]`-bound records; JSON via source-gen `AppJsonSerializerContext`
+- `[FromBody]`-bound records; JSON via source-gen `AppJsonSerializerContext`
 
 ## Dapper.AOT Setup
 
-1. Project property: `<DapperAotInterceptorsNamespaces>FunctionalWebApi.Repositories</DapperAotInterceptorsNamespaces>`
-2. `[DapperAot]` on every entity that has Dapper extensions generated
-3. `UserDto` is bound by `[DapperAot]` + `[DapperAot("...")]` for SQL strings
-4. **Trim/AOT**: `<PublishTrimmed>true</PublishTrimmed>`, suppress `CS9270` (Dapper interceptors), `NU1903` (SQLite native P/Invoke)
+1. Project property: `<InterceptorsNamespaces>Dapper.AOT</InterceptorsNamespaces>`
+2. `[DapperAot]` on every entity that has Dapper extensions generated (`UserDto`)
+3. **Trim/AOT**: `<PublishTrimmed>true</PublishTrimmed>`, `<PublishAot>true</PublishAot>`, `<SelfContained>true</SelfContained>`, suppress `CS9270` (Dapper interceptors), `NU1903` (SQLite native advisory)
 
 ## Native AOT Constraints
 
@@ -144,10 +138,9 @@ private static async Task<UserDto> Create(CreateUserCmd cmd, CancellationToken c
 
 ## Packages (in FunctionalWebApi.csproj)
 
-- `Microsoft.AspNetCore.OpenApi` (removed for Swaggerless mode — comments only)
 - `Dapper` + `Dapper.AOT` (source-gen)
 - `Microsoft.Data.Sqlite`
-- `Microsoft.IdentityModel.Tokens` + `Microsoft.IdentityModel.JsonWebTokens` (use `JsonWebTokenHandler`, not `JwtSecurityTokenHandler`)
+- `System.IdentityModel.Tokens.Jwt` (use `JsonWebTokenHandler`, not `JwtSecurityTokenHandler`)
 - `System.Text.Json` (source-gen via `AppJsonSerializerContext`)
 - `Microsoft.AspNetCore.App` framework reference (transitive AOT support)
 
@@ -157,30 +150,30 @@ Configure `<RootNamespace>FunctionalWebApi</RootNamespace>`, `<ImplicitUsings>en
 
 | Method | Path | Body | Returns | Errors |
 |--------|------|------|---------|--------|
-| `POST` | `/users` | `CreateUserCmd { Name, Email, Password, ConfirmPassword }` | 200 `UserDto` | 400 mismatch, 409 email exists |
+| `POST` | `/users` | `CreateUserCmd { Name, Email, Password, ConfirmPassword }` | 200 `UserDto` | 400 mismatch/empty, 409 email exists |
 | `GET` | `/users` | — | 200 `UserDto[]` | — |
 | `GET` | `/users/{id}` | — | 200 `UserDto` | 404 |
 | `POST` | `/login` | `LoginCmd { Username, Password }` | 200 `AuthToken { Token }` | 401 |
+| `PUT` | `/users/{id}/password` | `ChangePasswordCmd { CurrentPassword, NewPassword, ConfirmNewPassword }` | 200 `UserDto` | 400/401/404 |
 
 ## SQLite Schema
 
-On startup, `EnsureSchema()` runs:
+On startup, `SchemaBootstrap.EnsureCreatedAsync` runs:
 ```sql
-CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    name          TEXT    NOT NULL,
-    email         TEXT    NOT NULL UNIQUE,
-    password_hash TEXT    NOT NULL
+CREATE TABLE IF NOT EXISTS Users (
+    Id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    Name         TEXT    NOT NULL,
+    Email        TEXT    NOT NULL UNIQUE,
+    PasswordHash TEXT    NOT NULL DEFAULT ''
 );
 ```
 
 ## Testing Strategy (When Added)
 
 Recommended targets:
-1. `ArgumentPasswordHasher` — hash/verify round-trip + constant-time
-2. `UserRepository` — round-trip against in-memory SQLite (`Data Source=:memory:`)
-3. `UserService` — login (good/bad), create (mismatch/exists)
-4. `DomainErrorHandler` — each exception type maps to right HTTP code
+1. `UserRepository` — round-trip against in-memory SQLite (`Data Source=:memory:`)
+2. `UserService` — login (good/bad), create (mismatch/empty), change-password (wrong current/mismatch)
+3. `DomainErrorHandler` — each exception type maps to right HTTP code
 
 Test project tooling: `xunit`, `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstudio`.
 
@@ -189,8 +182,8 @@ Test project tooling: `xunit`, `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstu
 - **Strings & records** not classes for DTOs
 - **`internal sealed`** for non-DI types
 - **`private static`** for endpoint handlers
-- **`throw`** AppException, never `new FailureResult(...)`
-- **File-scoped namespaces** (clear `Domain/`, `Errors/`, etc. avoid full namespaces)
+- **`throw`** carried exception on failure, never `new FailureResult(...)`
+- **File-scoped namespaces**
 - **No DI** for domain services — pass `Func<>` delegates built by `Composition`
 - **`TEXT` PRIMARY KEY** auto-generated by SQLite for IDENTITY
 
@@ -198,11 +191,11 @@ Test project tooling: `xunit`, `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstu
 
 | Decision | Reason |
 |---------|--------|
-| AOT-first | ~5 MB binary, second-fastest startup, single-file publish, no runtime patching |
-| Exception-based errors | Cleaner code than `Result<T,E>` everywhere, AOT validates catch blocks at compile-time, ProblemDetails already standard |
+| AOT-first | ~18 MB binary, fast startup, single-file publish, no runtime patching |
+| BCL exceptions over custom hierarchy | Cleaner code, AOT validates catch blocks at compile-time, ProblemDetails standard |
 | `Func<>` injection not DI | Testability without container, faster cold start, no reflection |
-| PBKDF2 not BCrypt | Pure .NET 10, no native dependency, PHC-style format future-proofs migrations |
-| Static handlers not lambdas | Source-gen → AOT trim-safe; runtime lambdas force rolling reflection fallback |
+| PBKDF2 (future) | Pure .NET 10, no native dependency, PHC-style format future-proofs migrations |
+| Static handlers not lambdas | Source-gen → AOT trim-safe; runtime lambdas force reflection fallback |
 
 ## Gotchas to Avoid
 
@@ -217,7 +210,7 @@ Test project tooling: `xunit`, `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstu
    private static async Task<...> MyHandler(...) { ... }
    ```
 
-2. **DO NOT** use Swashbuckle/SwaggerGen — not AOT-trim-safe. Use `Microsoft.OpenApi` if OpenAPI doc needed (or skip entirely).
+2. **DO NOT** use Swashbuckle/SwaggerGen — not AOT-trim-safe.
 
 3. **DO NOT** add `services.AddScoped<IUserRepository, UserRepository>()` — domain is DI-free. Repositories and services are static.
 
@@ -229,21 +222,14 @@ Test project tooling: `xunit`, `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstu
 
 ```
 FunctionalWebApi/
-├── Contracts/Commands.cs
-├── Contracts/JwtConfig.cs
-├── Domain/Result.cs
-├── Domain/ResultCollection.cs
-├── Domain/DomainErrorHandler.cs        # IExceptionHandler
-├── Domain/ErrorTypes.cs               # AppException moved here from Errors/
+├── Contracts/{Commands.cs, JwtConfig.cs}
+├── Domain/{Result.cs, ResultCollection.cs, DomainErrorHandler.cs}
+├── Endpoints/UserEndpoints.cs
+├── Infrastructure/{AppJsonSerializerContext.cs, Composition.cs, SchemaBootstrap.cs}
 ├── Models/UserDto.cs
-├── Security/ArgumentPasswordHasher.cs
 ├── Repositories/UserRepository.cs     # Dapper.AOT
 ├── Services/UserService.cs
-├── Endpoints/UserEndpoints.cs         # MapUserEndpoints + handlers
-├── Endpoints/Composition.cs            # config → Bind → Map
-├── Endpoints/AppJsonSerializerContext.cs
-├── Program.cs                          # WebApplication.CreateBuilder, bind
-├── DapperAot.cs                        # [assembly: DapperAot]
+├── Program.cs                          # 34 lines: builder + DI + UseExceptionHandler + RegisterAllEndpoints + RunAsync
 ├── FunctionalWebApi.csproj
 └── appsettings.json
 ```

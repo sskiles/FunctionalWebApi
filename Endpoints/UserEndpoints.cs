@@ -2,6 +2,7 @@ namespace FunctionalWebApi.Endpoints;
 
 using FunctionalWebApi.Contracts;
 using FunctionalWebApi.Domain;
+using FunctionalWebApi.Infrastructure;
 using FunctionalWebApi.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;

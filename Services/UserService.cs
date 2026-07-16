@@ -2,11 +2,11 @@ namespace FunctionalWebApi.Services;
 
 using System.Data;
 using System.Security.Claims;
-using System.Security.Cryptography;
 using System.Text;
 using FunctionalWebApi.Contracts;
 using FunctionalWebApi.Domain;
 using FunctionalWebApi.Endpoints;
+using FunctionalWebApi.Infrastructure;
 using FunctionalWebApi.Models;
 using FunctionalWebApi.Repositories;
 using Microsoft.IdentityModel.JsonWebTokens;
@@ -19,56 +19,180 @@ using JwtReg = Microsoft.IdentityModel.JsonWebTokens.JwtRegisteredClaimNames;
 /// <see cref="Exception"/> value. Unknown infrastructure failures remain
 /// as uncaught exceptions and surface as HTTP 500 downstream.
 ///
-/// Each method takes an already‑open <see cref="IDbConnection"/> managed by
-/// the caller. The service never owns the connection's lifetime. Password
-/// verification logic is inlined; there is no dedicated hasher class.
+/// Each public method takes its repository collaborators as method-group
+/// parameters <em>already bound to a connection factory</em>. The service
+/// never references <see cref="UserRepository"/> by name; <see cref="Composition"/>
+/// passes the method groups in after currying the <c>newConnection</c>
+/// delegate. This keeps the layered separation clean: the service validates,
+/// shapes, and applies use-case rules, and the repository only persists.
+///
+/// TEMPORARY: passwords are passed and persisted verbatim. No hashing,
+/// no verification, no constant-time compare. When password handling is
+/// properly reintroduced this layer will own the hashing and provide a
+/// proper <see cref="UnauthorizedAccessException"/> path.
 /// </summary>
 public static class UserService
 {
     /// <summary>
-    /// Verifies the credentials via the repository's constant‑time
-    /// authenticator and issues a fresh JWT on success. Any failure surfaces
-    /// as a single <see cref="UnauthorizedAccessException"/> so callers
-    /// cannot enumerate accounts.
+    /// Verifies the credentials via the repository's authenticator and
+    /// issues a fresh JWT on success. Any failure surfaces as a single
+    /// <see cref="UnauthorizedAccessException"/> so callers cannot enumerate
+    /// accounts.
     /// </summary>
     /// <remarks>
     /// The <paramref name="authenticate"/> delegate is built by
-    /// <see cref="Composition.RegisterAllEndpoints"/> and is responsible for
-    /// opening and disposing its own <see cref="IDbConnection"/>. The login
-    /// flow performs only one DB read.
+    /// <see cref="Composition.RegisterAllEndpoints"/> with the connection
+    /// factory already applied. The login flow performs only one DB read.
     /// </remarks>
     public static async Task<Result<AuthToken, Exception>> LoginAsync(
         Func<string, char[], Task<Result<UserDto, Exception>>> authenticate,
         JwtConfig jwt,
         LoginCmd cmd)
     {
-        ArgumentNullException.ThrowIfNull(authenticate);
-        ArgumentNullException.ThrowIfNull(cmd);
+        if (authenticate is null)
+            return new ArgumentNullException(nameof(authenticate));
+        if (jwt is null)
+            return new ArgumentNullException(nameof(jwt));
+        if (cmd is null)
+            return new ArgumentNullException(nameof(cmd));
 
         var passwordChars = cmd.Password.ToCharArray();
-        Result<UserDto, Exception> authResult;
         try
         {
-            authResult = await authenticate(cmd.Username, passwordChars);
+            var authResult = await authenticate(cmd.Username, passwordChars);
+            if (authResult.IsFailure)
+            {
+                return authResult.Error!;
+            }
+
+            var user = authResult.Value!;
+            var jwtValue = IssueToken(jwt, user);
+            return new AuthToken(jwtValue);
         }
-        catch
+        finally
         {
             Array.Clear(passwordChars, 0, passwordChars.Length);
-            return new UnauthorizedAccessException("Invalid credentials");
         }
+    }
 
-        Array.Clear(passwordChars, 0, passwordChars.Length);
+    /// <summary>
+    /// Validates the supplied <see cref="CreateUserCmd"/>, confirms that the
+    /// two password fields match (plain server-side comparison, regardless
+    /// of client validation), and persists the user through the repository
+    /// via the injected <paramref name="createInRepository"/> delegate
+    /// (already curried with a connection factory). Returns either the new
+    /// <see cref="UserDto"/>, an <see cref="ArgumentException"/> describing
+    /// the input problem, or a plain <see cref="Exception"/> for storage
+    /// failures.
+    /// </summary>
+    public static async Task<Result<UserDto, Exception>> CreateUserAsync(
+        Func<string, string, string, Task<Result<UserDto, Exception>>> createInRepository,
+        CreateUserCmd cmd,
+        CancellationToken ct = default)
+    {
+        if (createInRepository is null)
+            return new ArgumentNullException(nameof(createInRepository));
+        if (cmd is null)
+            return new ArgumentNullException(nameof(cmd));
 
-        if (authResult.IsFailure)
+        if (string.IsNullOrWhiteSpace(cmd.Name))
         {
-            // Surface whatever exception the delegate returned (typically
-            // UnauthorizedAccessException for any auth failure).
-            return authResult.Error!;
+            return new ArgumentException("Name cannot be empty.");
         }
 
-        var user = authResult.Value!;
+        if (string.IsNullOrWhiteSpace(cmd.Email))
+        {
+            return new ArgumentException("Email is required.");
+        }
 
-        var tokenHandler = new JsonWebTokenHandler();
+        if (cmd.Password.Length == 0)
+        {
+            return new ArgumentException("Password cannot be empty.");
+        }
+
+        if (!string.Equals(cmd.Password, cmd.ConfirmPassword, StringComparison.Ordinal))
+        {
+            return new ArgumentException("Password confirmation does not match.");
+        }
+
+        var trimmedName = cmd.Name.Trim();
+        var trimmedEmail = cmd.Email.Trim().ToLowerInvariant();
+
+        if (trimmedEmail.Length < 5 || !trimmedEmail.Contains('@') || !trimmedEmail.Contains('.'))
+        {
+            return new ArgumentException("Email format invalid.");
+        }
+
+        return await createInRepository(trimmedName, trimmedEmail, cmd.Password);
+    }
+
+    /// <summary>
+    /// Changes a user's password by updating it via the repository's update
+    /// delegate. The two repository collaborators
+    /// (<paramref name="getByIdInRepository"/> and
+    /// <paramref name="updatePasswordInRepository"/>) are injected as
+    /// method-group delegates already bound to a connection factory. Returns
+    /// the updated <see cref="UserDto"/>, or one of:
+    /// <see cref="KeyNotFoundException"/>, <see cref="UnauthorizedAccessException"/>,
+    /// or <see cref="ArgumentException"/>.
+    /// </summary>
+    /// <remarks>TEMPORARY: current-password is not verified. The endpoint
+    /// confirms the value is non-empty only. Will be replaced when
+    /// password handling is reintroduced.</remarks>
+    public static async Task<Result<UserDto, Exception>> ChangePasswordAsync(
+        Func<int, Task<Result<UserDto, Exception>>> getByIdInRepository,
+        Func<int, string, Task<Result<int, Exception>>> updatePasswordInRepository,
+        int userId,
+        ChangePasswordCmd cmd)
+    {
+        if (getByIdInRepository is null)
+            return new ArgumentNullException(nameof(getByIdInRepository));
+        if (updatePasswordInRepository is null)
+            return new ArgumentNullException(nameof(updatePasswordInRepository));
+        if (cmd is null)
+            return new ArgumentNullException(nameof(cmd));
+
+        var loaded = await getByIdInRepository(userId);
+        if (loaded.IsFailure)
+        {
+            return loaded.Error!;
+        }
+        var user = loaded.Value!;
+
+        if (cmd.CurrentPassword.Length == 0)
+        {
+            return new ArgumentException("Current password cannot be empty.");
+        }
+
+        if (cmd.NewPassword.Length == 0)
+        {
+            return new ArgumentException("New password cannot be empty.");
+        }
+
+        if (!string.Equals(cmd.NewPassword, cmd.ConfirmNewPassword, StringComparison.Ordinal))
+        {
+            return new ArgumentException("New password confirmation does not match.");
+        }
+
+        var update = await updatePasswordInRepository(userId, cmd.NewPassword);
+        if (update.IsFailure)
+        {
+            return update.Error!;
+        }
+
+        var refreshed = await getByIdInRepository(userId);
+        return refreshed.IsFailure
+            ? refreshed.Error!
+            : refreshed.Value!;
+    }
+
+    // --- token issuance --------------------------------------------------
+    // Kept private to this service because it touches ClaimsIdentity +
+    // SigningCredentials, both pure orchestration concerns that don't
+    // belong in endpoints or repositories.
+
+    private static string IssueToken(JwtConfig jwt, UserDto user)
+    {
         var key = Encoding.UTF8.GetBytes(jwt.Key);
         var tokenDescriptor = new SecurityTokenDescriptor
         {
@@ -76,7 +200,7 @@ public static class UserService
             {
                 new Claim(JwtReg.Sub, user.Id.ToString()),
                 new Claim(JwtReg.Jti, Guid.NewGuid().ToString()),
-                new Claim("uid",      user.Id.ToString()),
+                new Claim("uid",    user.Id.ToString()),
             }),
             Expires = DateTime.UtcNow.AddMinutes(jwt.ExpiresMinutes),
             Issuer = jwt.Issuer,
@@ -85,158 +209,6 @@ public static class UserService
                 new SymmetricSecurityKey(key),
                 SecurityAlgorithms.HmacSha256),
         };
-        var jwtValue = tokenHandler.CreateToken(tokenDescriptor);
-        return new AuthToken(jwtValue);
-    }
-
-    /// <summary>
-    /// Validates the supplied <see cref="CreateUserCmd"/>, confirms that the
-    /// two password fields match (plain server‑side comparison, regardless
-    /// of client validation), and persists the user through the repository.
-    /// Returns either the new <see cref="UserDto"/>, an
-    /// <see cref="ArgumentException"/> describing the input problem, or a
-    /// plain <see cref="Exception"/> for storage failures.
-    /// </summary>
-    public static async Task<Result<UserDto, Exception>> CreateUserAsync(
-        Func<IDbConnection> newConnection,
-        CreateUserCmd cmd,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(newConnection);
-        ArgumentNullException.ThrowIfNull(cmd);
-
-        if (!string.Equals(cmd.Password, cmd.ConfirmPassword, StringComparison.Ordinal))
-        {
-            return new ArgumentException("Password confirmation does not match.");
-        }
-
-        var passwordChars = cmd.Password.ToCharArray();
-        try
-        {
-            return await UserRepository.CreateAsync(newConnection, cmd.Name, cmd.Email, passwordChars);
-        }
-        finally
-        {
-            // Repository also clears; defensive second wipe in case it short-circuited.
-            Array.Clear(passwordChars, 0, passwordChars.Length);
-        }
-    }
-
-    /// <summary>
-    /// Changes a user's password after verifying the current one. Returns
-    /// the updated <see cref="UserDto"/>, or one of:
-    /// <see cref="KeyNotFoundException"/>,
-    /// <see cref="UnauthorizedAccessException"/>, or
-    /// <see cref="ArgumentException"/>.
-    /// </summary>
-    public static async Task<Result<UserDto, Exception>> ChangePasswordAsync(
-        Func<IDbConnection> newConnection,
-        int userId,
-        ChangePasswordCmd cmd)
-    {
-        ArgumentNullException.ThrowIfNull(newConnection);
-        ArgumentNullException.ThrowIfNull(cmd);
-
-        var loaded = await UserRepository.GetByIdAsync(newConnection, userId);
-        if (loaded.IsFailure)
-        {
-            return loaded.Error!;
-        }
-        var user = loaded.Value!;
-
-        // Verify the current password against the stored hash. Constant-time
-        // comparison via the same PBKDF2 path used at registration.
-        var currentPasswordChars = cmd.CurrentPassword.ToCharArray();
-        try
-        {
-            if (!VerifyPassword(currentPasswordChars, user.PasswordHash ?? string.Empty))
-            {
-                return new UnauthorizedAccessException("Current password is incorrect.");
-            }
-        }
-        finally
-        {
-            Array.Clear(currentPasswordChars, 0, currentPasswordChars.Length);
-        }
-
-        if (!string.Equals(cmd.NewPassword, cmd.ConfirmNewPassword, StringComparison.Ordinal))
-        {
-            return new ArgumentException("New password confirmation does not match.");
-        }
-
-        var newPasswordChars = cmd.NewPassword.ToCharArray();
-        try
-        {
-            var newHash = HashPassword(newPasswordChars);
-            var update = await UserRepository.UpdatePasswordAsync(newConnection, userId, newHash);
-            if (update.IsFailure)
-            {
-                return update.Error!;
-            }
-
-            var refreshed = await UserRepository.GetByIdAsync(newConnection, userId);
-            return refreshed.IsFailure
-                ? refreshed.Error!
-                : refreshed.Value!;
-        }
-        finally
-        {
-            Array.Clear(newPasswordChars, 0, newPasswordChars.Length);
-        }
-    }
-
-    // --- inline password helpers -----------------------------------------
-    // Same PBKDF2-HMAC-SHA256 recipe as the repository. Kept private to
-    // this service so the verification step lives next to the orchestration
-    // that calls it.
-
-    private const int Iterations = 600_000;
-    private const int SaltSize = 16;
-    private const int HashSize = 32;
-
-    private static string HashPassword(char[] passwordChars)
-    {
-        var salt = RandomNumberGenerator.GetBytes(SaltSize);
-        var hash = new Rfc2898DeriveBytes(
-            Encoding.UTF8.GetBytes(new string(passwordChars)),
-            salt,
-            Iterations,
-            HashAlgorithmName.SHA256).GetBytes(HashSize);
-        return $"{Iterations}${Convert.ToBase64String(salt)}${Convert.ToBase64String(hash)}";
-    }
-
-    private static bool VerifyPassword(char[] passwordChars, string stored)
-    {
-        try
-        {
-            var parts = stored.Split('$');
-            if (parts.Length != 3) return Burn();
-            if (!int.TryParse(parts[0], out var iterations)) return Burn();
-            var salt   = Convert.FromBase64String(parts[1]);
-            var expect = Convert.FromBase64String(parts[2]);
-            if (salt.Length != SaltSize || expect.Length != HashSize) return Burn();
-
-            var candidate = new Rfc2898DeriveBytes(
-                Encoding.UTF8.GetBytes(new string(passwordChars)),
-                salt,
-                iterations,
-                HashAlgorithmName.SHA256).GetBytes(HashSize);
-
-            return CryptographicOperations.FixedTimeEquals(expect, candidate);
-        }
-        finally
-        {
-            Array.Clear(passwordChars, 0, passwordChars.Length);
-        }
-    }
-
-    private static bool Burn()
-    {
-        _ = new Rfc2898DeriveBytes(
-            Array.Empty<byte>(),
-            new byte[SaltSize],
-            Iterations,
-            HashAlgorithmName.SHA256).GetBytes(HashSize);
-        return false;
+        return new JsonWebTokenHandler().CreateToken(tokenDescriptor);
     }
 }

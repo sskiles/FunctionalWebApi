@@ -1,10 +1,13 @@
 #pragma warning disable SA1200 // Using directives should be placed correctly
-using Dapper;
-using FunctionalWebApi;
-using FunctionalWebApi.Endpoints;
+using FunctionalWebApi.Infrastructure;
 using Microsoft.AspNetCore.Http.Json;
-using Microsoft.Data.Sqlite;
 #pragma warning restore SA1200 // Using directives should be placed correctly
+
+// Globally enables Dapper.AOT code generation for this assembly. The source
+// generator intercepts compatible Dapper call sites (e.g.
+// `connection.QueryFirst<T>(sql, params)`) and produces IL that doesn't fall
+// back on runtime Reflection.Emit — which is required for NativeAOT.
+[assembly: Dapper.DapperAot(true)]
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,23 +28,7 @@ var app = builder.Build();
 // Exception handling middleware sits above everything else and relies on IExceptionHandler.
 app.UseExceptionHandler();
 
-// Ensure DB schema exists, using the connection string the composition root
-// is about to validate.
-var configuration = app.Configuration;
-var connectionString = configuration.GetConnectionString("Sqlite")!;
-// Dapper auto-opens the connection on first use; we don't pre-open here.
-await using (var conn = new SqliteConnection(connectionString))
-{
-    _ = await conn.ExecuteAsync(@"
-        CREATE TABLE IF NOT EXISTS Users (
-            Id INTEGER PRIMARY KEY AUTOINCREMENT,
-            Name TEXT NOT NULL,
-            Email TEXT NOT NULL UNIQUE,
-            PasswordHash TEXT NOT NULL DEFAULT ''
-        );");
-}
-
-// Everything wired in one call.
-app.RegisterAllEndpoints(configuration);
+// Composition runs the schema bootstrap and wires the route pipelines.
+await app.RegisterAllEndpoints(app.Configuration);
 
 await app.RunAsync();
