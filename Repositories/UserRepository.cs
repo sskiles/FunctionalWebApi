@@ -24,6 +24,8 @@ using FunctionalWebApi.Models;
 /// </summary>
 public static class UserRepository
 {
+
+    public static Func<IDbConnection> newConnection = null!;
     /// <summary>
     /// Persists a new user row from already-validated input. The supplied
     /// <paramref name="password"/> is persisted verbatim — there is no
@@ -33,7 +35,6 @@ public static class UserRepository
     /// persistence failure surfaces a plain <see cref="Exception"/>.
     /// </summary>
     public static async Task<Result<UserDto, Exception>> CreateAsync(
-        Func<IDbConnection> newConnection,
         string name,
         string email,
         string password)
@@ -69,8 +70,7 @@ public static class UserRepository
     /// Loads a user by id. Returns <see cref="KeyNotFoundException"/> if no
     /// row matches.
     /// </summary>
-    public static async Task<Result<UserDto, Exception>> GetByIdAsync(
-        Func<IDbConnection> newConnection, int id)
+    public static async Task<Result<UserDto, Exception>> GetByIdAsync(int id)
     {
         if (newConnection is null)
             return new ArgumentNullException(nameof(newConnection));
@@ -95,8 +95,7 @@ public static class UserRepository
     /// the password yet (no comparison against the stored value); will be
     /// replaced when password handling is reintroduced.
     /// </summary>
-    public static async Task<Result<UserDto, Exception>> TryAuthenticateAsync(
-        Func<IDbConnection> newConnection, string email, char[] passwordChars)
+    public static async Task<Result<UserDto, Exception>> TryAuthenticateAsync(string email, char[] passwordChars)
     {
         if (newConnection is null)
             return new ArgumentNullException(nameof(newConnection));
@@ -126,8 +125,7 @@ public static class UserRepository
     /// Returns every user, possibly empty. DB failures surface as a plain
     /// <see cref="Exception"/>.
     /// </summary>
-    public static async Task<ResultCollection<UserDto, Exception>> ListAsync(
-        Func<IDbConnection> newConnection)
+    public static async Task<ResultCollection<UserDto, Exception>> ListAsync()
     {
         if (newConnection is null)
             return new ArgumentNullException(nameof(newConnection));
@@ -151,8 +149,7 @@ public static class UserRepository
     /// plaintext storage; will be replaced). Returns the number of rows
     /// affected; 0 indicates <see cref="KeyNotFoundException"/>.
     /// </summary>
-    public static async Task<Result<int, Exception>> UpdatePasswordAsync(
-        Func<IDbConnection> newConnection, int userId, string newPassword)
+    public static async Task<Result<int, Exception>> UpdatePasswordAsync(int userId, string newPassword)
     {
         if (newConnection is null)
             return new ArgumentNullException(nameof(newConnection));

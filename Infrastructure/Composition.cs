@@ -75,29 +75,31 @@ public static class Composition
         // shaped delegates that the service layer consumes without any
         // infrastructure knowledge.
 
+        UserRepository.newConnection = newConnection;
+
         Func<string, char[], Task<Result<UserDto, Exception>>> authenticate =
-            (email, chars) => UserRepository.TryAuthenticateAsync(newConnection, email, chars);
+            (email, chars) => UserRepository.TryAuthenticateAsync(email, chars);
 
         Func<LoginCmd, Task<Result<AuthToken, Exception>>> loginHandler =
             async cmd => await UserService.LoginAsync(authenticate, jwt, cmd);
 
         Func<string, string, string, Task<Result<UserDto, Exception>>> createUserInRepository =
-            (name, email, password) => UserRepository.CreateAsync(newConnection, name, email, password);
+            (name, email, password) => UserRepository.CreateAsync(name, email, password);
 
         Func<CreateUserCmd, Task<Result<UserDto, Exception>>> createUserHandler =
             async cmd => await UserService.CreateUserAsync(createUserInRepository, cmd);
 
         Func<int, Task<Result<UserDto, Exception>>> getByIdHandler =
-            async id => await UserRepository.GetByIdAsync(newConnection, id);
+            async id => await UserRepository.GetByIdAsync(id);
 
         Func<Task<ResultCollection<UserDto, Exception>>> listHandler =
-            async () => await UserRepository.ListAsync(newConnection);
+            async () => await UserRepository.ListAsync();
 
         Func<int, Task<Result<UserDto, Exception>>> getByIdInRepository =
-            id => UserRepository.GetByIdAsync(newConnection, id);
+            id => UserRepository.GetByIdAsync(id);
 
         Func<int, string, Task<Result<int, Exception>>> updatePasswordInRepository =
-            (userId, newPassword) => UserRepository.UpdatePasswordAsync(newConnection, userId, newPassword);
+            (userId, newPassword) => UserRepository.UpdatePasswordAsync(userId, newPassword);
 
         Func<(int Id, ChangePasswordCmd Cmd), Task<Result<UserDto, Exception>>> changePasswordHandler =
             async t => await UserService.ChangePasswordAsync(
