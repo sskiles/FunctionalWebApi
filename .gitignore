@@ -74,11 +74,6 @@ Thumbs.db
 .config/
 *.workspace
 
-# Local config overrides (keep appsettings.json, but ignore overrides)
-appsettings.Development.json
-appsettings.Local.json
-appsettings.*.Production.json
-
 # SQLite database files (runtime-generated)
 *.sqlite
 *.sqlite3
@@ -93,6 +88,4 @@ secrets.json
 secrets.*.json
 
 # Powershell / Bash
-*.ps1
-*.sh
 !*.psm1
