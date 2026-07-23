@@ -5,10 +5,8 @@ using System.Security.Claims;
 using System.Text;
 using FunctionalWebApi.Contracts;
 using FunctionalWebApi.Domain;
-using FunctionalWebApi.Endpoints;
 using FunctionalWebApi.Infrastructure;
 using FunctionalWebApi.Models;
-using FunctionalWebApi.Repositories;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using JwtReg = Microsoft.IdentityModel.JsonWebTokens.JwtRegisteredClaimNames;
@@ -19,12 +17,12 @@ using JwtReg = Microsoft.IdentityModel.JsonWebTokens.JwtRegisteredClaimNames;
 /// <see cref="Exception"/> value. Unknown infrastructure failures remain
 /// as uncaught exceptions and surface as HTTP 500 downstream.
 ///
-/// Each public method takes its repository collaborators as method-group
-/// parameters <em>already bound to a connection factory</em>. The service
-/// never references <see cref="UserRepository"/> by name; <see cref="Composition"/>
-/// passes the method groups in after currying the <c>newConnection</c>
-/// delegate. This keeps the layered separation clean: the service validates,
-/// shapes, and applies use-case rules, and the repository only persists.
+/// Collaborators are pulled from <see cref="Composition"/> via the static
+/// constructor. The service never references <see cref="Repositories.UserRepository"/>
+/// by name; <see cref="Composition"/> wires the delegates after currying
+/// the connection factory. This keeps the layered separation clean: the
+/// service validates, shapes, and applies use-case rules, and the
+/// repository only persists.
 ///
 /// TEMPORARY: passwords are passed and persisted verbatim. No hashing,
 /// no verification, no constant-time compare. When password handling is
@@ -33,6 +31,21 @@ using JwtReg = Microsoft.IdentityModel.JsonWebTokens.JwtRegisteredClaimNames;
 /// </summary>
 public static class UserService
 {
+    private static readonly JwtConfig _jwt;
+    private static readonly Func<string, char[], Task<Result<UserDto, Exception>>> _authenticate;
+    private static readonly Func<string, string, string, Task<Result<UserDto, Exception>>> _createInRepository;
+    private static readonly Func<int, Task<Result<UserDto, Exception>>> _getByIdInRepository;
+    private static readonly Func<int, string, Task<Result<int, Exception>>> _updatePasswordInRepository;
+
+    static UserService()
+    {
+        _jwt = Composition.Jwt;
+        _authenticate = Composition.Authenticate;
+        _createInRepository = Composition.CreateInRepository;
+        _getByIdInRepository = Composition.GetByIdInRepository;
+        _updatePasswordInRepository = Composition.UpdatePasswordInRepository;
+    }
+
     /// <summary>
     /// Verifies the credentials via the repository's authenticator and
     /// issues a fresh JWT on success. Any failure surfaces as a single
@@ -40,33 +53,26 @@ public static class UserService
     /// accounts.
     /// </summary>
     /// <remarks>
-    /// The <paramref name="authenticate"/> delegate is built by
+    /// The <see cref="_authenticate"/> delegate is built by
     /// <see cref="Composition.RegisterAllEndpoints"/> with the connection
     /// factory already applied. The login flow performs only one DB read.
     /// </remarks>
-    public static async Task<Result<AuthToken, Exception>> LoginAsync(
-        Func<string, char[], Task<Result<UserDto, Exception>>> authenticate,
-        JwtConfig jwt,
-        LoginCmd cmd)
+    public static async Task<Result<AuthToken, Exception>> LoginAsync(LoginCmd cmd)
     {
-        if (authenticate is null)
-            return new ArgumentNullException(nameof(authenticate));
-        if (jwt is null)
-            return new ArgumentNullException(nameof(jwt));
         if (cmd is null)
             return new ArgumentNullException(nameof(cmd));
 
         var passwordChars = cmd.Password.ToCharArray();
         try
         {
-            var authResult = await authenticate(cmd.Username, passwordChars);
+            var authResult = await _authenticate(cmd.Username, passwordChars);
             if (authResult.IsFailure)
             {
                 return authResult.Error!;
             }
 
             var user = authResult.Value!;
-            var jwtValue = IssueToken(jwt, user);
+            var jwtValue = IssueToken(user);
             return new AuthToken(jwtValue);
         }
         finally
@@ -79,19 +85,14 @@ public static class UserService
     /// Validates the supplied <see cref="CreateUserCmd"/>, confirms that the
     /// two password fields match (plain server-side comparison, regardless
     /// of client validation), and persists the user through the repository
-    /// via the injected <paramref name="createInRepository"/> delegate
+    /// via the injected <see cref="_createInRepository"/> delegate
     /// (already curried with a connection factory). Returns either the new
     /// <see cref="UserDto"/>, an <see cref="ArgumentException"/> describing
     /// the input problem, or a plain <see cref="Exception"/> for storage
     /// failures.
     /// </summary>
-    public static async Task<Result<UserDto, Exception>> CreateUserAsync(
-        Func<string, string, string, Task<Result<UserDto, Exception>>> createInRepository,
-        CreateUserCmd cmd,
-        CancellationToken ct = default)
+    public static async Task<Result<UserDto, Exception>> CreateUserAsync(CreateUserCmd cmd)
     {
-        if (createInRepository is null)
-            return new ArgumentNullException(nameof(createInRepository));
         if (cmd is null)
             return new ArgumentNullException(nameof(cmd));
 
@@ -123,14 +124,14 @@ public static class UserService
             return new ArgumentException("Email format invalid.");
         }
 
-        return await createInRepository(trimmedName, trimmedEmail, cmd.Password);
+        return await _createInRepository(trimmedName, trimmedEmail, cmd.Password);
     }
 
     /// <summary>
     /// Changes a user's password by updating it via the repository's update
     /// delegate. The two repository collaborators
-    /// (<paramref name="getByIdInRepository"/> and
-    /// <paramref name="updatePasswordInRepository"/>) are injected as
+    /// (<see cref="_getByIdInRepository"/> and
+    /// <see cref="_updatePasswordInRepository"/>) are injected as
     /// method-group delegates already bound to a connection factory. Returns
     /// the updated <see cref="UserDto"/>, or one of:
     /// <see cref="KeyNotFoundException"/>, <see cref="UnauthorizedAccessException"/>,
@@ -139,25 +140,16 @@ public static class UserService
     /// <remarks>TEMPORARY: current-password is not verified. The endpoint
     /// confirms the value is non-empty only. Will be replaced when
     /// password handling is reintroduced.</remarks>
-    public static async Task<Result<UserDto, Exception>> ChangePasswordAsync(
-        Func<int, Task<Result<UserDto, Exception>>> getByIdInRepository,
-        Func<int, string, Task<Result<int, Exception>>> updatePasswordInRepository,
-        int userId,
-        ChangePasswordCmd cmd)
+    public static async Task<Result<UserDto, Exception>> ChangePasswordAsync(int userId, ChangePasswordCmd cmd)
     {
-        if (getByIdInRepository is null)
-            return new ArgumentNullException(nameof(getByIdInRepository));
-        if (updatePasswordInRepository is null)
-            return new ArgumentNullException(nameof(updatePasswordInRepository));
         if (cmd is null)
             return new ArgumentNullException(nameof(cmd));
 
-        var loaded = await getByIdInRepository(userId);
+        var loaded = await _getByIdInRepository(userId);
         if (loaded.IsFailure)
         {
             return loaded.Error!;
         }
-        var user = loaded.Value!;
 
         if (cmd.CurrentPassword.Length == 0)
         {
@@ -174,13 +166,13 @@ public static class UserService
             return new ArgumentException("New password confirmation does not match.");
         }
 
-        var update = await updatePasswordInRepository(userId, cmd.NewPassword);
+        var update = await _updatePasswordInRepository(userId, cmd.NewPassword);
         if (update.IsFailure)
         {
             return update.Error!;
         }
 
-        var refreshed = await getByIdInRepository(userId);
+        var refreshed = await _getByIdInRepository(userId);
         return refreshed.IsFailure
             ? refreshed.Error!
             : refreshed.Value!;
@@ -191,20 +183,20 @@ public static class UserService
     // SigningCredentials, both pure orchestration concerns that don't
     // belong in endpoints or repositories.
 
-    private static string IssueToken(JwtConfig jwt, UserDto user)
+    private static string IssueToken(UserDto user)
     {
-        var key = Encoding.UTF8.GetBytes(jwt.Key);
+        var key = Encoding.UTF8.GetBytes(_jwt.Key);
         var tokenDescriptor = new SecurityTokenDescriptor
         {
             Subject = new ClaimsIdentity(new[]
             {
                 new Claim(JwtReg.Sub, user.Id.ToString()),
                 new Claim(JwtReg.Jti, Guid.NewGuid().ToString()),
-                new Claim("uid",    user.Id.ToString()),
+                new Claim("uid", user.Id.ToString()),
             }),
-            Expires = DateTime.UtcNow.AddMinutes(jwt.ExpiresMinutes),
-            Issuer = jwt.Issuer,
-            Audience = jwt.Audience,
+            Expires = DateTime.UtcNow.AddMinutes(_jwt.ExpiresMinutes),
+            Issuer = _jwt.Issuer,
+            Audience = _jwt.Audience,
             SigningCredentials = new SigningCredentials(
                 new SymmetricSecurityKey(key),
                 SecurityAlgorithms.HmacSha256),

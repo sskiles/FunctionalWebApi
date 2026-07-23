@@ -5,6 +5,7 @@ using System.Data;
 using Dapper;
 using Microsoft.Data.Sqlite;
 using FunctionalWebApi.Domain;
+using FunctionalWebApi.Infrastructure;
 using FunctionalWebApi.Models;
 
 /// <summary>
@@ -16,16 +17,18 @@ using FunctionalWebApi.Models;
 /// <see cref="Exception"/> wrapping any driver/connectivity/constraint
 /// error caught at the SQL boundary.
 ///
-/// Each method takes a <see cref="Func{IDbConnection}"/> from composition.
-/// Inside the method the connection is constructed (closed), opened lazily
-/// by Dapper on first query, and disposed at method exit. The driver type
-/// stays invisible to callers — they hand over a delegate without knowing
-/// what database engine is behind it.
+/// The connection factory is pulled from <see cref="Composition.NewConnection"/>
+/// via the static constructor. The driver type stays invisible to callers.
 /// </summary>
 public static class UserRepository
 {
+    private static readonly Func<IDbConnection> _newConnection;
 
-    public static Func<IDbConnection> newConnection = null!;
+    static UserRepository()
+    {
+        _newConnection = Composition.NewConnection;
+    }
+
     /// <summary>
     /// Persists a new user row from already-validated input. The supplied
     /// <paramref name="password"/> is persisted verbatim — there is no
@@ -39,8 +42,6 @@ public static class UserRepository
         string email,
         string password)
     {
-        if (newConnection is null)
-            return new ArgumentNullException(nameof(newConnection));
         if (name is null)
             return new ArgumentNullException(nameof(name));
         if (email is null)
@@ -51,7 +52,7 @@ public static class UserRepository
         var trimmedName = name.Trim();
         var trimmedEmail = email.Trim().ToLowerInvariant();
 
-        using var conn = newConnection();
+        using var conn = _newConnection();
         try
         {
             var id = await conn.ExecuteScalarAsync<int>(
@@ -72,10 +73,7 @@ public static class UserRepository
     /// </summary>
     public static async Task<Result<UserDto, Exception>> GetByIdAsync(int id)
     {
-        if (newConnection is null)
-            return new ArgumentNullException(nameof(newConnection));
-
-        using var conn = newConnection();
+        using var conn = _newConnection();
         var user = await conn.QueryFirstOrDefaultAsync<UserDto>(
             "SELECT Id, Name, Email, PasswordHash FROM Users WHERE Id = @id",
             new { id });
@@ -97,8 +95,6 @@ public static class UserRepository
     /// </summary>
     public static async Task<Result<UserDto, Exception>> TryAuthenticateAsync(string email, char[] passwordChars)
     {
-        if (newConnection is null)
-            return new ArgumentNullException(nameof(newConnection));
         if (email is null)
             return new ArgumentNullException(nameof(email));
         if (passwordChars is null)
@@ -111,7 +107,7 @@ public static class UserRepository
             return new UnauthorizedAccessException("Invalid credentials");
         }
 
-        using var conn = newConnection();
+        using var conn = _newConnection();
         var row = await conn.QueryFirstOrDefaultAsync<UserDto>(
             "SELECT Id, Name, Email, PasswordHash FROM Users WHERE Email = @email",
             new { email = email.Trim().ToLowerInvariant() });
@@ -127,12 +123,9 @@ public static class UserRepository
     /// </summary>
     public static async Task<ResultCollection<UserDto, Exception>> ListAsync()
     {
-        if (newConnection is null)
-            return new ArgumentNullException(nameof(newConnection));
-
         try
         {
-            using var conn = newConnection();
+            using var conn = _newConnection();
             var users = (await conn.QueryAsync<UserDto>(
                 "SELECT Id, Name, Email, PasswordHash FROM Users")).ToList();
             return users;
@@ -151,12 +144,10 @@ public static class UserRepository
     /// </summary>
     public static async Task<Result<int, Exception>> UpdatePasswordAsync(int userId, string newPassword)
     {
-        if (newConnection is null)
-            return new ArgumentNullException(nameof(newConnection));
         if (newPassword is null)
             return new ArgumentNullException(nameof(newPassword));
 
-        using var conn = newConnection();
+        using var conn = _newConnection();
         var affected = await conn.ExecuteAsync(
             "UPDATE Users SET PasswordHash = @hash WHERE Id = @id",
             new { hash = newPassword, id = userId });

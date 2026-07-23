@@ -19,37 +19,25 @@ using Microsoft.AspNetCore.Http;
 /// to the appropriate HTTP status (401/404/400 etc.).
 ///
 /// Handler bodies are deliberately thin: each one invokes a single
-/// per-operation pipeline delegate injected by
-/// <see cref="Composition.RegisterAllEndpoints"/>, then unwraps the result.
-/// All connection handling and orchestration lives in <see cref="Composition"/>.
+/// per-operation pipeline delegate pulled from <see cref="Composition"/> via
+/// the static constructor, then unwraps the result.
 /// </summary>
 public static class UserEndpoints
 {
-    // Pipeline delegates injected by Composition at startup. Each one is the
-    // entire body for one route (connection open + service/repo call +
-    // JWT issuance where relevant). Handler bodies simply invoke and unwrap.
-    private static Func<LoginCmd, Task<Result<AuthToken, Exception>>> LoginHandler = null!;
-    private static Func<CreateUserCmd, Task<Result<UserDto, Exception>>> CreateUserHandler = null!;
-    private static Func<int, Task<Result<UserDto, Exception>>> GetByIdHandler = null!;
-    private static Func<Task<ResultCollection<UserDto, Exception>>> ListHandler = null!;
-    private static Func<(int Id, ChangePasswordCmd Cmd), Task<Result<UserDto, Exception>>> ChangePasswordHandler = null!;
+    // Pipeline delegates pulled from Composition at static init.
+    public static readonly Func<LoginCmd, Task<Result<AuthToken, Exception>>> LoginHandler;
+    public static readonly Func<CreateUserCmd, Task<Result<UserDto, Exception>>> CreateUserHandler;
+    public static readonly Func<int, Task<Result<UserDto, Exception>>> GetByIdHandler;
+    public static readonly Func<Task<ResultCollection<UserDto, Exception>>> ListHandler;
+    public static readonly Func<(int Id, ChangePasswordCmd Cmd), Task<Result<UserDto, Exception>>> ChangePasswordHandler;
 
-    /// <summary>
-    /// Binds the per-operation pipeline delegates built by
-    /// <see cref="Composition.RegisterAllEndpoints"/>.
-    /// </summary>
-    public static void Bind(
-        Func<LoginCmd, Task<Result<AuthToken, Exception>>> loginHandler,
-        Func<CreateUserCmd, Task<Result<UserDto, Exception>>> createUserHandler,
-        Func<int, Task<Result<UserDto, Exception>>> getByIdHandler,
-        Func<Task<ResultCollection<UserDto, Exception>>> listHandler,
-        Func<(int Id, ChangePasswordCmd Cmd), Task<Result<UserDto, Exception>>> changePasswordHandler)
+    static UserEndpoints()
     {
-        LoginHandler = loginHandler;
-        CreateUserHandler = createUserHandler;
-        GetByIdHandler = getByIdHandler;
-        ListHandler = listHandler;
-        ChangePasswordHandler = changePasswordHandler;
+        LoginHandler = Composition.LoginHandler;
+        CreateUserHandler = Composition.CreateUserHandler;
+        GetByIdHandler = Composition.GetByIdHandler;
+        ListHandler = Composition.ListHandler;
+        ChangePasswordHandler = Composition.ChangePasswordHandler;
     }
 
     /// <summary>
@@ -112,6 +100,7 @@ public static class UserEndpoints
     // On failure the carried Exception is thrown so DomainErrorHandler can
     // map it to the right HTTP status (UnauthorizedAccessException → 401,
     // KeyNotFoundException → 404, ArgumentException → 400, etc.).
+
     private static IResult Unwrap<TValue, TError>(Result<TValue, TError> result)
         where TError : Exception
     {
